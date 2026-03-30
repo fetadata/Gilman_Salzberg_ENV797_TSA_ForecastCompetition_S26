@@ -19,17 +19,20 @@ here()
 ## Import Data
 ```{r}
 demand_init <- read_excel(
-  path=here('Data',"load.xlsx"),
+  path=here('Data', "Raw","load.xlsx"),
   col_names=T) 
 
 humid_init <- read_excel(
-  path=here('Data',"relative_humidity.xlsx"),
+  path=here('Data', "Raw","relative_humidity.xlsx"),
   col_names=T) 
 
 temp_init <- read_excel(
-  path=here('Data',"temperature.xlsx"),
+  path=here('Data', "Raw","temperature.xlsx"),
   col_names=T) 
 
+summary(demand_init)
+summary(humid_init)
+summary(temp_init)
 ```
 
 
@@ -40,7 +43,7 @@ demand_clean <- demand_init %>%
   pivot_longer(cols = c(3:26), names_to = "hour", values_to = "load") %>% 
   group_by(date) %>% 
     summarize(avg_load=mean(load))
-write.csv(demand_clean, file = here("Data","Salzberg_CleanDemand.csv"))
+write.csv(demand_clean, file = here("Data","Processed","Salzberg_CleanDemand.csv"))
 
 
 humid_clean <- humid_init %>% 
@@ -48,7 +51,7 @@ humid_clean <- humid_init %>%
   pivot_longer(cols = c(3:30), names_to = "RH_source",  values_to = "humidity") %>% 
   group_by(date) %>% 
     summarize(avg_humidity=mean(humidity))
-write.csv(humid_clean, file = here("Data","Salzberg_CleanHumidity.csv"))
+write.csv(humid_clean, file = here("Data","Processed","Salzberg_CleanHumidity.csv"))
 
 
 temp_clean <- temp_init %>% 
@@ -56,7 +59,28 @@ temp_clean <- temp_init %>%
   pivot_longer(cols = c(3:30), names_to = "T_source", values_to = "temp") %>% 
   group_by(date) %>% 
     summarize(avg_temp=mean(temp))
-write.csv(temp_clean, file = here("Data","Salzberg_CleanTemp.csv"))
+write.csv(temp_clean, file = here("Data","Processed", "Salzberg_CleanTemp.csv"))
 
 ```
+
+
+# Visualize Series
+
+```{r}
+ggplot(data = demand_clean, aes(x = date, y = avg_load))+
+  geom_line()+
+  labs(title = "Average Daily Electricity Demand",
+       y = "Average Electricity Demand per Day")
+
+ggplot(data = humid_clean, aes(x = date, y = avg_humidity))+
+  geom_line()+
+  labs(title = "Average Daily Humidity",
+       y = "Average Humidity per Day")
+
+ggplot(data = temp_clean, aes(x = date, y = avg_temp))+
+  geom_line()+
+  labs(title = "Average Daily Temperature",
+       y = "Average Temperature per Day")
+```
+
 

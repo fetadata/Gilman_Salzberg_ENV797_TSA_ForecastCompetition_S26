@@ -1,0 +1,54 @@
+---
+title: "Salzberg_SimpleSeasNaive1"
+output: html_document
+---
+
+# Set up & Load Data
+```{r}
+libraries <- c('forecast','here','tidyverse','zoo','Kendall','tseries','outliers','smooth', "openxlsx", "readxl", "stats")
+lapply(libraries,require,character.only=T)
+here()
+
+demand <- read.csv(here("Data",'Processed','Salzberg_CleanDemand.csv'))
+demand <- select(.data = demand, !X)
+demand <- mutate(.data=demand, date = ymd(date))
+
+summary(demand)
+```
+
+# Convert to Time Series
+```{r}
+demand_ts <- ts(data = demand[,2], start = c(2005,01,01), frequency = 365.25)
+
+autoplot(demand_ts)
+Acf(demand_ts, lag.max = 48)
+Pacf(demand_ts, lag.max = 48)
+```
+
+
+# Decompose demand_ts
+```{r}
+decomp_demand_ts <- decompose(demand_ts, type = "additive")
+
+autoplot(decomp_demand_ts)
+```
+
+
+# Divide into Training and Testing Data
+```{r}
+# training data
+TrainingWindow = 365
+demand_ts_training <- subset(demand_ts,
+                                   end = length(demand_ts)-TrainingWindow)
+
+#create a subset for testing purpose
+demand_ts_testing <- subset(demand_ts,
+                                   start = length(demand_ts)-TrainingWindow+1)
+
+
+autoplot(demand_ts_training)
+autoplot(demand_ts_testing)
+```
+
+
+
