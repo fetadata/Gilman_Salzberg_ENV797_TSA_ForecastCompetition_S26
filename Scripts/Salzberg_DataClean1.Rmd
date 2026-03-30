@@ -48,12 +48,15 @@ humid_clean <- humid_init %>%
   pivot_longer(cols = c(3:30), names_to = "RH_source",  values_to = "humidity") %>% 
   group_by(date) %>% 
     summarize(avg_humidity=mean(humidity))
+write.csv(humid_clean, file = here("Data","Salzberg_CleanHumidity.csv"))
+
 
 temp_clean <- temp_init %>% 
   mutate(date = ymd(date)) %>% 
   pivot_longer(cols = c(3:30), names_to = "T_source", values_to = "temp") %>% 
   group_by(date) %>% 
     summarize(avg_temp=mean(temp))
+write.csv(temp_clean, file = here("Data","Salzberg_CleanTemp.csv"))
 
 ```
 
