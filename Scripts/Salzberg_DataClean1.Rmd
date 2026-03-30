@@ -1,0 +1,46 @@
+---
+title: "Salzberg_DataCleanAttempt1"
+author: "Josh Salzberg"
+date: "2026-03-30"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Setup
+```{r}
+libraries <- c('forecast','here','tidyverse','zoo','Kendall','tseries','outliers','smooth', "openxlsx", "readxl", "stats")
+lapply(libraries,require,character.only=T)
+here()
+```
+
+## Import Data
+```{r}
+demand_init <- read_excel(
+  path=here('Data',"load.xlsx"),
+  col_names=T) 
+
+humid_init <- read_excel(
+  path=here('Data',"relative_humidity.xlsx"),
+  col_names=T) 
+
+temp_init <- read_excel(
+  path=here('Data',"temperature.xlsx"),
+  col_names=T) 
+
+```
+
+
+## Clean Data
+```{r}
+demand_clean <- demand_init %>% 
+  mutate(date = ymd(date)) %>% 
+  pivot_longer(cols = c(3:26), names_to = "hour", values_to = "load") %>% 
+  group_by(date) %>% 
+    summarize(avg_load=mean(load))
+write.csv(demand_clean, file = here("Data","Salzberg_CleanDemand.csv"))
+
+```
+
