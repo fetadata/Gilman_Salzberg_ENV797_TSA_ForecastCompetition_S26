@@ -14,12 +14,13 @@ demand <- select(.data = demand, !X)
 demand <- mutate(.data=demand, date = ymd(date))
 
 summary(demand)
+
 ```
 
 # Convert to Time Series
 ```{r}
-demand_ts <- ts(data = demand[,2], start = c(2005,01,01), frequency = 365.25)
-
+demand_ts <- ts(data = demand[,2], start = c(2005,01,01), frequency = 365)
+demand_ts <- na.interp(demand_ts,linear = T)
 autoplot(demand_ts)
 Acf(demand_ts, lag.max = 48)
 Pacf(demand_ts, lag.max = 48)
@@ -50,5 +51,16 @@ autoplot(demand_ts_training)
 autoplot(demand_ts_testing)
 ```
 
+# Simple Seasonal Naive run & review
+```{r}
+observed <- demand[(2372-TrainingWindow+1):(2372+31),"avg_load"]
+SNAIVE_fore <- snaive(y=demand_ts_training, h=396)
+checkresiduals(SNAIVE_fore)
+
+SNAIVE_accuracy <- accuracy(SNAIVE_fore$mean, observed)
+plot(SNAIVE_fore)
+
+
+```
 
 
