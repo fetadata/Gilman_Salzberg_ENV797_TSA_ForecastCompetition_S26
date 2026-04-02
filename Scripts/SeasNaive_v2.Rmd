@@ -1,0 +1,156 @@
+---
+title: "Seasonal Naive Model 2"
+date: "2026-04-02"
+output: pdf_document
+editor_options:
+  chunk_output_type: console
+---
+
+## Setup
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, tidy.opts=list(width.cutoff=80), tidy=FALSE,
+                      message=FALSE, warning=FALSE)
+```
+
+```{r packages, message=FALSE, warning=FALSE}
+rm(list = ls())
+
+library(lubridate)
+library(ggplot2)
+library(forecast)
+library(tidyverse)
+library(kableExtra)
+```
+
+## Load Processed Data
+
+```{r}
+here()
+demand <- read.csv(
+  file = "Data/Processed/CleanDemand_v1.csv"
+) %>%
+  select(-X) %>%
+  mutate(date = ymd(date))
+
+nobs <- nrow(demand)
+
+head(demand)
+summary(demand)
+```
+
+## Create msts Object
+
+Using msts() to capture both the weekly (period = 7) and the annual cycle (period = 365.25)
+
+```{r}
+demand_msts <- msts(demand$avg_load,
+                    seasonal.periods = c(7, 365.25),
+                    start = c(2005, 1))
+```
+
+## Visualize and Decompose
+
+```{r}
+autoplot(demand_msts) +
+  ylab("Average Daily Load (kWh)") +
+  xlab("Year") +
+  ggtitle("Daily Electricity Demand: Jan 2005 - Jun 2011")
+```
+
+```{r}
+
+demand_msts %>%
+  mstl() %>%
+  autoplot()
+```
+
+## Training / Test Split
+
+Train on Jan 1 2005 - June 30 2010 and test on July 1 2010 - June 31 2011
+
+```{r}
+
+n_for <- 365
+
+demand_train <- subset(demand_msts,
+                       end = length(demand_msts) - n_for)
+
+demand_test <- subset(demand_msts,
+                      start = length(demand_msts) - n_for + 1)
+
+# validation is July 2010 only - first 31 days of test window
+observed_july2010 <- demand$avg_load[(nobs - n_for + 1):(nobs - n_for + 31)]
+
+autoplot(demand_train)
+autoplot(demand_test)
+```
+
+## Fit Seasonal Naive Model
+
+```{r}
+SNAIVE_for <- snaive(demand_train, h = 31)
+
+# Residual diagnostics
+checkresiduals(SNAIVE_for)
+```
+
+## Check accuracy
+
+```{r}
+SNAIVE_scores <- accuracy(SNAIVE_for$mean, observed_july2010)
+
+scores_df <- as.data.frame(SNAIVE_scores)
+row.names(scores_df) <- c("SNAIVE")
+
+kbl(scores_df,
+    caption = "Seasonal Naive Forecast Accuracy - July 2010 Validation",
+    digits = array(4, ncol(scores_df))) %>%
+  kable_styling(full_width = FALSE, position = "center",
+                latex_options = "hold_position")
+```
+
+## Plot forecast vs observed for July 2010
+
+```{r}
+
+autoplot(demand_test) +
+  autolayer(SNAIVE_for, PI=FALSE, series="Seasonal Naive") +
+  coord_cartesian(xlim = c(2010.5, 2010.5 + 31/365.25)) +
+  ylab("Average Daily Load (kWh)") +
+  xlab("Date") +
+  labs(title = "Seasonal Naive: Forecast vs. Observed - July 2010",
+       color = "") +
+  theme_classic()
+```
+
+## Final forecast
+
+Retrain on the full dataset (Jan 2005 - Jun 2011) and forecast July 2011
+
+```{r}
+
+SNAIVE_final <- snaive(demand_msts, h = 31)
+autoplot(SNAIVE_final) +
+  ylab("Average Daily Load (kWh)") +
+  xlab("Year") +
+  ggtitle("Seasonal Naive: July 2011 Forecast") +
+  theme_classic()
+```
+
+## Export forecast for Kaggle
+
+```{r}
+july2011_dates <- seq(as.Date("2011-07-01"), as.Date("2011-07-31"), by = "day")
+
+submission <- data.frame(
+  date = july2011_dates,
+  load = as.numeric(SNAIVE_final$mean)
+)
+
+write.csv(submission,
+          file = "Submissions/gilman_salzberg_snaive2.csv",
+          row.names = FALSE)
+
+head(submission)
+```
