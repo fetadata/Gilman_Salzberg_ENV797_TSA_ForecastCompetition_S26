@@ -1,0 +1,47 @@
+---
+title: "AutoArima"
+author: "Josh Salzberg"
+date: "2026-04-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+---
+title: "Salzberg_SimpleSeasNaive1"
+output: html_document
+---
+
+# Set up & Load Data
+```{r}
+libraries <- c('forecast','here','tidyverse','zoo','Kendall','tseries','outliers','smooth', "openxlsx", "readxl", "stats")
+lapply(libraries,require,character.only=T)
+here()
+
+demand <- read.csv(here("Data",'Processed','CleanDemand_v1.csv'))
+demand <- select(.data = demand, !X)
+demand <- mutate(.data=demand, date = ymd(date))
+
+summary(demand)
+
+```
+
+# Convert to Time Series
+```{r}
+demand_ts <- ts(data = demand[,2], start = c(2005,01,01), frequency = 365)
+demand_ts <- na.interp(demand_ts,linear = T)
+autoplot(demand_ts)
+Acf(demand_ts, lag.max = 48)
+Pacf(demand_ts, lag.max = 48)
+```
+
+
+# Decompose demand_ts
+```{r}
+decomp_demand_ts <- decompose(demand_ts, type = "additive")
+
+autoplot(decomp_demand_ts)
+```
+

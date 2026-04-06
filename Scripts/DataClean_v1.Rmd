@@ -43,7 +43,7 @@ demand_clean <- demand_init %>%
   pivot_longer(cols = c(3:26), names_to = "hour", values_to = "load") %>% 
   group_by(date) %>% 
     summarize(avg_load=mean(load))
-write.csv(demand_clean, file = here("Data","Processed","Salzberg_CleanDemand.csv"))
+write.csv(demand_clean, file = here("Data","Processed","CleanDemand_v1.csv"))
 
 
 humid_clean <- humid_init %>% 
@@ -51,7 +51,14 @@ humid_clean <- humid_init %>%
   pivot_longer(cols = c(3:30), names_to = "RH_source",  values_to = "humidity") %>% 
   group_by(date) %>% 
     summarize(avg_humidity=mean(humidity))
-write.csv(humid_clean, file = here("Data","Processed","Salzberg_CleanHumidity.csv"))
+write.csv(humid_clean, file = here("Data","Processed","CleanHumidity_v1.csv"))
+
+# humid_clean2 <- humid_init %>% 
+#   mutate(date = ymd(date)) %>% 
+#   mutate(avg_humidity=mean(across(c(3:30))))
+#   group_by(date) %>% 
+#     summarize(avg_humidity_final=mean(avg_humidity))
+# write.csv(humid_clean, file = here("Data","Processed","CleanHumidity_v2.csv"))
 
 
 temp_clean <- temp_init %>% 
@@ -59,7 +66,7 @@ temp_clean <- temp_init %>%
   pivot_longer(cols = c(3:30), names_to = "T_source", values_to = "temp") %>% 
   group_by(date) %>% 
     summarize(avg_temp=mean(temp))
-write.csv(temp_clean, file = here("Data","Processed", "Salzberg_CleanTemp.csv"))
+write.csv(temp_clean, file = here("Data","Processed", "CleanTemp_v1.csv"))
 
 ```
 
