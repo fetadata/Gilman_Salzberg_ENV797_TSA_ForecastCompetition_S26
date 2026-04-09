@@ -72,3 +72,47 @@ julyforecast <- data.frame(SNAIVE_fore_final$mean)
 
 ```
 
+
+
+# AUTO.ARIMA VS SMA vs SES
+```{r}
+auto_arima_test <- auto.arima(y=demand_ts_training,
+                              max.p = 2,
+                              max.d = 2,
+                              max.q = 2, 
+                              max.P = 0,
+                              max.D = 0,
+                              max.Q = 0, seasonal = F)
+print(auto_arima_test)
+auto_arima_forecast <- forecast(auto_arima_test, h = 31)
+autoplot(auto_arima_forecast)
+
+
+auto_sarima_test <- auto.arima(y=demand_ts_training,
+                              max.p = 2,
+                              max.d = 1,
+                              max.q = 2, 
+                              max.P = 2,
+                              max.D = 1,
+                              max.Q = 2)
+print(auto_sarima_test)
+auto_sarima_forecast <- forecast(auto_sarima_test, h = 31)
+autoplot(auto_sarima_forecast)
+df_compare_auto_AICs <- data.frame(AIC(auto_arima_test), AIC(auto_sarima_test))
+
+
+
+
+
+
+
+
+
+
+
+
+
+df_compare_accuracy <- as.data.frame(rbind(accuracy(SNAIVE_fore$mean, observed), accuracy(auto_arima_forecast$mean, observed),accuracy(auto_sarima_forecast$mean,observed)))
+row.names(df_compare_accuracy) <- c('snaive','auto arima','auto sarima')
+```
+
