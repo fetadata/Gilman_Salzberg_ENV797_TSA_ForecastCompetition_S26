@@ -44,7 +44,8 @@ demand_ts_training <- subset(demand_ts,
 
 #create a subset for testing purpose
 demand_ts_testing <- subset(demand_ts,
-                                   start = length(demand_ts)-TrainingWindow+1)
+                            start = length(demand_ts)-TrainingWindow+1,
+                            end = length(demand_ts)-TrainingWindow+30)
 
 
 autoplot(demand_ts_training)
@@ -53,11 +54,12 @@ autoplot(demand_ts_testing)
 
 # Simple Seasonal Naive run & review
 ```{r}
-observed <- demand[(2372-TrainingWindow+1):(2372),"avg_load"]
-SNAIVE_fore <- snaive(y=demand_ts_training, h=365)
+observed <- demand[(nrow(demand)-TrainingWindow+1):(nrow(demand)-TrainingWindow+30),"avg_load"]
+SNAIVE_fore <- snaive(y=demand_ts_training, h=31)
 checkresiduals(SNAIVE_fore)
 
 SNAIVE_accuracy <- accuracy(SNAIVE_fore$mean, observed)
+plot(SNAIVE_accuracy)
 plot(SNAIVE_fore)
 ```
 
