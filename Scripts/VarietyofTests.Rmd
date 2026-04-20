@@ -7,7 +7,9 @@ editor_options:
 
 # Set up & Load Data
 ```{r}
-libraries <- c('forecast','here','tidyverse','zoo','Kendall','tseries','outliers','smooth', "openxlsx", "readxl", "stats")
+libraries <- c('forecast','here','tidyverse','zoo','Kendall',
+               'tseries','outliers','smooth', "openxlsx", "readxl",
+               "stats",'prophet')
 lapply(libraries,require,character.only=T)
 here()
 
@@ -23,6 +25,7 @@ summary(demand)
 ```{r}
 demand_ts <- msts(data = demand[,2], start = c(2005,1), seasonal.periods = c(7,365.25))
 demand_ts <- na.interp(demand_ts,linear = T)
+demand_ts <- msts(data = demand[,2], start = c(2005,1), seasonal.periods = c(7,365.25))
 autoplot(demand_ts)
 Acf(demand_ts, lag.max = 48)
 Pacf(demand_ts, lag.max = 48)
@@ -91,18 +94,18 @@ auto_arima_forecast <- forecast(auto_arima_test, h = 31)
 autoplot(auto_arima_forecast)
 
 
-auto_sarima_test <- auto.arima(y=demand_ts_training,
-                              max.p = 3,
-                              max.d = 1,
-                              max.q = 3, 
-                              max.P = 3,
-                              max.D = 1,
-                              max.Q = 3,
-                              seasonal = T)
-print(auto_sarima_test)
-auto_sarima_forecast <- forecast(auto_sarima_test, h = 31)
-autoplot(auto_sarima_forecast)
-df_compare_auto_AICs <- data.frame(AIC(auto_arima_test), AIC(auto_sarima_test))
+# auto_sarima_test <- auto.arima(y=demand_ts_training,
+#                               max.p = 3,
+#                               max.d = 1,
+#                               max.q = 3, 
+#                               max.P = 3,
+#                               max.D = 1,
+#                               max.Q = 3,
+#                               seasonal = T)
+# print(auto_sarima_test)
+# auto_sarima_forecast <- forecast(auto_sarima_test, h = 31)
+# autoplot(auto_sarima_forecast)
+# df_compare_auto_AICs <- data.frame(AIC(auto_arima_test), AIC(auto_sarima_test))
 
 
 # ARIMA + FOURIER 
@@ -122,23 +125,75 @@ auto_arima_fourier_forecast <- forecast(auto_arima_fourier_fit,
                            h=31)
 
 
-
+# STL+ETS
 ets_train <-  stlf(demand_ts_training,h=31, s.window = "periodic")
 
+#Neural 
 neural_train <- nnetar(demand_ts_training,
                  p=2,
                  P=0,
                  xreg=fourier(demand_ts_training,
                                         K=c(3,4)))
-#NN_for <- forecast(NN_fit, h=365) 
 neural_fore <- forecast(neural_train, 
                    h=31,
                    xreg=fourier(demand_ts_training, 
                                           K=c(3,4),h=31))
 
-SS_seas <- StructTS(demand_ts_training, type="BSM",fixed=c(NA,NA,NA))
+# PROPHET
+colnames(demand) <-  c("ds",'y')
+df <- prophet(demand)
+future <- make_future_dataframe(df,periods = 31)
+tail(future)
+forecast <- predict(df,future)
+tail(forecast)
+plot(df,forecast)
+prophet_plot_components(df,forecast)
 
-df_compare_accuracy <- as.data.frame(rbind(accuracy(SNAIVE_fore$mean, observed), accuracy(auto_arima_forecast$mean, observed),accuracy(auto_sarima_forecast$mean,observed), accuracy(auto_arima_fourier_forecast$mean,observed), accuracy(ets_train$mean,observed), accuracy(neural_fore$mean,observed), accuracy(exponentialsmooth_fore$mean,observed)))
-row.names(df_compare_accuracy) <- c('snaive','auto arima','auto sarima','auto arima+fourier','ets','neural','es')
+
+df_compare_accuracy <- as.data.frame(rbind(accuracy(SNAIVE_fore$mean, observed), 
+         accuracy(auto_arima_forecast$mean,observed),
+         accuracy(auto_arima_fourier_forecast$mean,observed), 
+         accuracy(ets_train$mean,observed), 
+         accuracy(neural_fore$mean,observed), 
+         accuracy(forecast$yhat,observed)))
+row.names(df_compare_accuracy) <- c('snaive','auto arima',
+                                    'auto arima+fourier',
+                                    'ets','neural','prophet')
 ```
 
+```{r}
+final_fourier <- auto.arima(demand_ts, 
+                             seasonal=FALSE, 
+                             lambda=0,
+                             xreg=fourier(demand_ts, 
+                                          K=c(2,24)))
+final_fourier_forecast <- forecast(final_fourier,
+                           xreg=fourier(demand_ts,
+                                        K=c(2,24),
+                                        h=31),
+                           h=31)
+
+
+autoplot(final_fourier_forecast) +
+  ylab("Average Daily Load (kWh)") +
+  xlab("Year") +
+  ggtitle("Seasonal Naive: July 2011 Forecast") +
+  theme_classic()
+```
+
+## Export forecast for Kaggle
+
+```{r}
+july2011_dates <- seq(as.Date("2011-07-01"), as.Date("2011-07-31"), by = "day")
+
+submission <- data.frame(
+  date = july2011_dates,
+  load = as.numeric(final_fourier_forecast$mean)
+)
+
+write.csv(submission,
+          file = "Submissions/gilman_salzberg_arima_fourier.csv",
+          row.names = FALSE)
+
+head(submission)
+```
