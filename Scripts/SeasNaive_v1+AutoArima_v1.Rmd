@@ -1,6 +1,8 @@
 ---
 title: "Salzberg_SimpleSeasNaive1"
 output: html_document
+editor_options: 
+  chunk_output_type: console
 ---
 
 # Set up & Load Data
@@ -19,7 +21,7 @@ summary(demand)
 
 # Convert to Time Series
 ```{r}
-demand_ts <- ts(data = demand[,2], start = c(2005,01,01), frequency = 365)
+demand_ts <- msts(data = demand[,2], start = c(2005,1), seasonal.periods = c(7,365.25))
 demand_ts <- na.interp(demand_ts,linear = T)
 autoplot(demand_ts)
 Acf(demand_ts, lag.max = 48)
@@ -41,12 +43,13 @@ autoplot(decomp_demand_ts)
 TrainingWindow = 365
 demand_ts_training <- subset(demand_ts,
                                    end = length(demand_ts)-TrainingWindow)
+demand_ts_training <- msts(demand_ts_training, seasonal.periods = c(7,365.25))
 
 #create a subset for testing purpose
 demand_ts_testing <- subset(demand_ts,
                             start = length(demand_ts)-TrainingWindow+1,
-                            end = length(demand_ts)-TrainingWindow+30)
-
+                            end = length(demand_ts)-TrainingWindow+31)
+demand_ts_testing <- msts(demand_ts_testing, seasonal.periods = c(7,365.25))
 
 autoplot(demand_ts_training)
 autoplot(demand_ts_testing)
@@ -54,7 +57,7 @@ autoplot(demand_ts_testing)
 
 # Simple Seasonal Naive run & review
 ```{r}
-observed <- demand[(nrow(demand)-TrainingWindow+1):(nrow(demand)-TrainingWindow+30),"avg_load"]
+observed <- demand[(nrow(demand)-TrainingWindow+1):(nrow(demand)-TrainingWindow+31),"avg_load"]
 SNAIVE_fore <- snaive(y=demand_ts_training, h=31)
 checkresiduals(SNAIVE_fore)
 
@@ -74,7 +77,7 @@ julyforecast <- data.frame(SNAIVE_fore_final$mean)
 
 
 
-# AUTO.ARIMA VS SMA vs SES
+# AUTO.ARIMA VS AUTO.SARIMA
 ```{r}
 auto_arima_test <- auto.arima(y=demand_ts_training,
                               max.p = 2,
@@ -89,30 +92,53 @@ autoplot(auto_arima_forecast)
 
 
 auto_sarima_test <- auto.arima(y=demand_ts_training,
-                              max.p = 2,
+                              max.p = 3,
                               max.d = 1,
-                              max.q = 2, 
-                              max.P = 2,
+                              max.q = 3, 
+                              max.P = 3,
                               max.D = 1,
-                              max.Q = 2)
+                              max.Q = 3,
+                              seasonal = T)
 print(auto_sarima_test)
 auto_sarima_forecast <- forecast(auto_sarima_test, h = 31)
 autoplot(auto_sarima_forecast)
 df_compare_auto_AICs <- data.frame(AIC(auto_arima_test), AIC(auto_sarima_test))
 
 
+# ARIMA + FOURIER 
+auto_arima_fourier_fit <- auto.arima(demand_ts_training, 
+                             seasonal=FALSE, 
+                             lambda=0,
+                             xreg=fourier(demand_ts_training, 
+                                          K=c(2,24))
+                             )
+summary(auto_arima_fourier_fit)
+checkresiduals(auto_arima_fourier_fit)
+#Forecast with ARIMA fit
+auto_arima_fourier_forecast <- forecast(auto_arima_fourier_fit,
+                           xreg=fourier(demand_ts_training,
+                                        K=c(2,24),
+                                        h=31),
+                           h=31)
 
 
 
+ets_train <-  stlf(demand_ts_training,h=31, s.window = "periodic")
 
+neural_train <- nnetar(demand_ts_training,
+                 p=2,
+                 P=0,
+                 xreg=fourier(demand_ts_training,
+                                        K=c(3,4)))
+#NN_for <- forecast(NN_fit, h=365) 
+neural_fore <- forecast(neural_train, 
+                   h=31,
+                   xreg=fourier(demand_ts_training, 
+                                          K=c(3,4),h=31))
 
+SS_seas <- StructTS(demand_ts_training, type="BSM",fixed=c(NA,NA,NA))
 
-
-
-
-
-
-df_compare_accuracy <- as.data.frame(rbind(accuracy(SNAIVE_fore$mean, observed), accuracy(auto_arima_forecast$mean, observed),accuracy(auto_sarima_forecast$mean,observed)))
-row.names(df_compare_accuracy) <- c('snaive','auto arima','auto sarima')
+df_compare_accuracy <- as.data.frame(rbind(accuracy(SNAIVE_fore$mean, observed), accuracy(auto_arima_forecast$mean, observed),accuracy(auto_sarima_forecast$mean,observed), accuracy(auto_arima_fourier_forecast$mean,observed), accuracy(ets_train$mean,observed), accuracy(neural_fore$mean,observed), accuracy(exponentialsmooth_fore$mean,observed)))
+row.names(df_compare_accuracy) <- c('snaive','auto arima','auto sarima','auto arima+fourier','ets','neural','es')
 ```
 

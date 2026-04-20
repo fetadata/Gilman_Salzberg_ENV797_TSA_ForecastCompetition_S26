@@ -1,20 +1,9 @@
 ---
-title: "AutoArima"
-author: "Josh Salzberg"
-date: "2026-04-06"
+title: "SARIMA+Fourier"
 output: html_document
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-```
-
----
-title: "Salzberg_SimpleSeasNaive1"
-output: html_document
----
-
-# Set up & Load Data
+# Set up! 
 ```{r}
 libraries <- c('forecast','here','tidyverse','zoo','Kendall','tseries','outliers','smooth', "openxlsx", "readxl", "stats")
 lapply(libraries,require,character.only=T)
@@ -25,23 +14,44 @@ demand <- select(.data = demand, !X)
 demand <- mutate(.data=demand, date = ymd(date))
 
 summary(demand)
-
 ```
-
 # Convert to Time Series
 ```{r}
-demand_ts <- ts(data = demand[,2], start = c(2005,01,01), frequency = 365)
-demand_ts <- na.interp(demand_ts,linear = T)
-autoplot(demand_ts)
-Acf(demand_ts, lag.max = 48)
-Pacf(demand_ts, lag.max = 48)
+demand_msts <- msts(data = demand[,2], start = c(2005,01,01), seasonal.periods = c(7,365.25))
+demand_msts <- na.interp(demand_msts,linear = T)
+autoplot(demand_msts)
+Acf(demand_msts, lag.max = 48)
+Pacf(demand_msts, lag.max = 48)
 ```
 
-
-# Decompose demand_ts
+# view the decomposition for sanity
 ```{r}
-decomp_demand_ts <- decompose(demand_ts, type = "additive")
-
-autoplot(decomp_demand_ts)
+demand_msts %>% mstl() %>%
+  autoplot()
 ```
+
+# Training & Testing
+
+```{r}
+# training data
+TrainingWindow = 365
+demand_msts_training <- subset(demand_msts,
+                                   end = length(demand_msts)-TrainingWindow)
+
+#create a subset for testing purpose
+demand_msts_testing <- subset(demand_msts,
+                            start = length(demand_msts)-TrainingWindow+1,
+                            end = length(demand_msts)-TrainingWindow+30)
+
+
+autoplot(demand_msts_training)
+autoplot(demand_msts_testing)
+```
+
+
+
+# using auto.arima
+
+
+
 
