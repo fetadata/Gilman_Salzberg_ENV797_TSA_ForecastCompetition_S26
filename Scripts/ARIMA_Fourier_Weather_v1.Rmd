@@ -1,0 +1,255 @@
+---
+title: "ARIMA + Fourier with Weather Variables"
+author: "Gilman Salzberg"
+date: "2026-04-15"
+output: pdf_document
+editor_options:
+  chunk_output_type: console
+---
+
+## Setup
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, tidy.opts=list(width.cutoff=80), tidy=FALSE,
+                      message=FALSE, warning=FALSE)
+```
+
+```{r packages, message=FALSE, warning=FALSE}
+rm(list = ls())
+
+library(lubridate)
+library(ggplot2)
+library(forecast)
+library(tidyverse)
+library(kableExtra)
+library(here)
+
+```
+
+## Load Processed Data
+
+```{r}
+here()
+demand <- read.csv(
+  file = "Data/Processed/CleanDemand_v1.csv"
+) %>%
+  select(-X) %>%
+  mutate(date = ymd(date))
+
+temp <- read.csv(
+  file = "Data/Processed/CleanTemp_v1.csv"
+) %>%
+  select(-X) %>%
+  mutate(date = ymd(date))
+
+humidity <- read.csv(
+  file = "Data/Processed/CleanHumidity_v1.csv"
+) %>%
+  select(-X) %>%
+  mutate(date = ymd(date))
+
+# Join all datasets
+data_full <- demand %>%
+  left_join(temp, by = "date") %>%
+  left_join(humidity, by = "date")
+
+nobs <- nrow(data_full)
+
+head(data_full)
+summary(data_full)
+```
+
+## Create msts Object and Weather Matrix
+
+```{r}
+# Handle NAs BEFORE creating msts
+demand_clean <- na.interp(demand$avg_load, linear = TRUE)
+
+# Create msts from clean data
+demand_msts <- msts(demand_clean,
+                    seasonal.periods = c(7, 365.25),
+                    start = c(2005, 1))
+
+cat("demand_msts class:", class(demand_msts), "\n")
+
+# Create matrix of exogenous variables (temperature and humidity)
+weather_xreg <- cbind(temp = data_full$avg_temp,
+                      humid = data_full$avg_humidity)
+
+head(weather_xreg)
+```
+
+## Visualize Relationships
+
+```{r}
+# Plot demand vs temperature
+ggplot(data_full, aes(x = avg_temp, y = avg_load)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "loess") +
+  labs(title = "Electricity Demand vs Temperature",
+       x = "Average Temperature",
+       y = "Average Daily Load (kWh)") +
+  theme_classic()
+
+# Plot demand vs humidity
+ggplot(data_full, aes(x = avg_humidity, y = avg_load)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "loess") +
+  labs(title = "Electricity Demand vs Humidity",
+       x = "Average Humidity",
+       y = "Average Daily Load (kWh)") +
+  theme_classic()
+```
+
+## Training / Test Split
+
+Train on Jan 1 2005 - June 30 2010 and test on July 1 2010 - June 30 2011
+
+```{r}
+
+n_for <- 365
+
+# Training data - interpolate BEFORE creating msts
+train_load <- data_full$avg_load[1:(nobs - n_for)]
+train_load_clean <- na.interp(train_load, linear = TRUE)
+demand_train <- msts(train_load_clean,
+                     seasonal.periods = c(7, 365.25),
+                     start = c(2005, 1))
+
+# Test data
+test_load <- data_full$avg_load[(nobs - n_for + 1):nobs]
+test_load_clean <- na.interp(test_load, linear = TRUE)
+demand_test <- msts(test_load_clean,
+                    seasonal.periods = c(7, 365.25),
+                    start = c(2010, 182))
+
+# Split weather variables
+weather_train <- weather_xreg[1:(nobs - n_for), ]
+weather_test <- weather_xreg[(nobs - n_for + 1):nobs, ]
+
+# For July 2010 validation (first 31 days of test)
+weather_july2010 <- weather_test[1:31, ]
+observed_july2010 <- data_full$avg_load[(nobs - n_for + 1):(nobs - n_for + 31)]
+
+# Verify msts structure
+cat("demand_train class:", class(demand_train), "\n")
+
+autoplot(demand_train)
+autoplot(demand_test)
+
+```
+
+## Fit ARIMA + Fourier with Weather Variables
+
+Following class example from Module 9.
+Using K=c(2,12) for daily data with weekly (7) and yearly (365.25) seasonality.
+
+```{r}
+# Fit ARIMA model with fourier terms AND weather variables as exogenous regressors
+# seasonal = FALSE means we handle seasonality with Fourier terms
+# lambda = 0 is log transformation to ensure positive forecasts
+
+ARIMA_weather_fit <- auto.arima(demand_train,
+                                seasonal = FALSE,
+                                lambda = 0,
+                                xreg = cbind(fourier(demand_train, K = c(2, 4)),
+                                            weather_train))
+
+print(ARIMA_weather_fit)
+```
+
+## Check Residuals
+
+```{r}
+checkresiduals(ARIMA_weather_fit)
+```
+
+## Forecast for Validation (July 2010)
+
+```{r}
+# Forecast with ARIMA fit
+# Need to specify h for fourier terms AND provide weather data
+ARIMA_weather_for <- forecast(ARIMA_weather_fit,
+                              xreg = cbind(fourier(demand_train, K = c(2, 4), h = 31),
+                                          weather_july2010),
+                              h = 31)
+
+# Plot forecasting results
+autoplot(ARIMA_weather_for) +
+  ylab("Average Daily Load (kWh)") +
+  ggtitle("ARIMA + Fourier + Weather: Forecast")
+```
+
+## Plot Forecast vs Observed for July 2010
+
+```{r}
+autoplot(demand_test) +
+  autolayer(ARIMA_weather_for, series="ARIMA+Fourier+Weather", PI=FALSE) +
+  coord_cartesian(xlim = c(2010.5, 2010.5 + 31/365.25)) +
+  ylab("Average Daily Load (kWh)") +
+  xlab("Date") +
+  labs(title = "ARIMA+Fourier+Weather: Forecast vs. Observed - July 2010",
+       color = "") +
+  theme_classic()
+```
+
+## Check Accuracy
+
+```{r}
+ARIMA_weather_scores <- accuracy(ARIMA_weather_for$mean, observed_july2010)
+
+scores_df <- as.data.frame(ARIMA_weather_scores)
+row.names(scores_df) <- c("ARIMA+Fourier+Weather")
+
+kbl(scores_df,
+    caption = "ARIMA+Fourier+Weather Forecast Accuracy - July 2010 Validation",
+    digits = array(4, ncol(scores_df))) %>%
+  kable_styling(full_width = FALSE, position = "center",
+                latex_options = "hold_position")
+```
+
+## Final Forecast for July 2011
+
+Retrain on the full dataset (Jan 2005 - Jun 2011) and forecast July 2011.
+
+**NOTE**: We have weather data through June 2011. For July 2011 forecast, we'll use July 2010 weather as a seasonal proxy (reasonable assumption for one-year seasonal pattern).
+
+```{r}
+# Extract July 2010 weather to use as proxy for July 2011
+july2010_weather <- weather_xreg[(nobs - n_for + 1):(nobs - n_for + 31), ]
+
+# Retrain on full data (Jan 2005 - Jun 2011)
+ARIMA_weather_final <- auto.arima(demand_msts,
+                                 seasonal = FALSE,
+                                 lambda = 0,
+                                 xreg = cbind(fourier(demand_msts, K = c(2, 4)),  # Change from c(2,12)
+                                             weather_xreg))
+
+ARIMA_weather_final_for <- forecast(ARIMA_weather_final,
+                                    xreg = cbind(fourier(demand_msts, K = c(2, 4), h = 31),
+                                                july2010_weather),  # Add the weather data!
+                                    h = 31)
+
+autoplot(ARIMA_weather_final_for) +
+  ylab("Average Daily Load (kWh)") +
+  xlab("Year") +
+  ggtitle("ARIMA+Fourier+Weather: July 2011 Forecast") +
+  theme_classic()
+```
+
+## Export Forecast for Kaggle
+
+```{r}
+july2011_dates <- seq(as.Date("2011-07-01"), as.Date("2011-07-31"), by = "day")
+
+submission <- data.frame(
+  date = july2011_dates,
+  load = as.numeric(ARIMA_weather_final_for$mean)
+)
+
+write.csv(submission,
+          file = "Submissions/gilman_salzberg_arima_fourier_weather.csv",
+          row.names = FALSE)
+
+head(submission)
+```

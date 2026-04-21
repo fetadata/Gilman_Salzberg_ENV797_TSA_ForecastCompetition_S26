@@ -1,0 +1,233 @@
+---
+title: "Neural Network with Weather Variables"
+author: "Gilman Salzberg"
+date: "2026-04-15"
+output: pdf_document
+editor_options:
+  chunk_output_type: console
+---
+
+## Setup
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, tidy.opts=list(width.cutoff=80), tidy=FALSE,
+                      message=FALSE, warning=FALSE)
+```
+
+```{r packages, message=FALSE, warning=FALSE}
+rm(list = ls())
+
+library(lubridate)
+library(ggplot2)
+library(forecast)
+library(tidyverse)
+library(kableExtra)
+library(here)
+
+```
+
+## Load Processed Data
+
+```{r}
+here()
+demand <- read.csv(
+  file = "Data/Processed/CleanDemand_v1.csv"
+) %>%
+  select(-X) %>%
+  mutate(date = ymd(date))
+
+temp <- read.csv(
+  file = "Data/Processed/CleanTemp_v1.csv"
+) %>%
+  select(-X) %>%
+  mutate(date = ymd(date))
+
+humidity <- read.csv(
+  file = "Data/Processed/CleanHumidity_v1.csv"
+) %>%
+  select(-X) %>%
+  mutate(date = ymd(date))
+
+# Join all datasets
+data_full <- demand %>%
+  left_join(temp, by = "date") %>%
+  left_join(humidity, by = "date")
+
+nobs <- nrow(data_full)
+
+head(data_full)
+summary(data_full)
+```
+
+## Create msts Object and Weather Matrix
+
+```{r}
+# Handle NAs BEFORE creating msts (7 NAs from DST transitions)
+demand_clean <- na.interp(data_full$avg_load, linear = TRUE)
+
+# Create msts from clean data
+demand_msts <- msts(demand_clean,
+                    seasonal.periods = c(7, 365.25),
+                    start = c(2005, 1))
+
+cat("NAs remaining:", sum(is.na(demand_msts)), "\n")
+cat("demand_msts class:", class(demand_msts), "\n")
+
+# Create matrix of exogenous variables (temperature, humidity, and fourier terms)
+weather_xreg <- cbind(temp = data_full$avg_temp,
+                      humid = data_full$avg_humidity)
+
+head(weather_xreg)
+```
+
+## Training / Test Split
+
+Train on Jan 1 2005 - June 30 2010 and test on July 1 2010 - June 30 2011
+
+```{r}
+
+n_for <- 365
+
+# DON'T use subset() - it loses msts structure
+# Recreate msts objects from actual data
+
+# Training data - interpolate BEFORE creating msts
+train_load <- data_full$avg_load[1:(nobs - n_for)]
+train_load_clean <- na.interp(train_load, linear = TRUE)
+demand_train <- msts(train_load_clean,
+                     seasonal.periods = c(7, 365.25),
+                     start = c(2005, 1))
+
+# Test data
+test_load <- data_full$avg_load[(nobs - n_for + 1):nobs]
+test_load_clean <- na.interp(test_load, linear = TRUE)
+demand_test <- msts(test_load_clean,
+                    seasonal.periods = c(7, 365.25),
+                    start = c(2010, 182))
+
+# Split weather variables
+weather_train <- weather_xreg[1:(nobs - n_for), ]
+weather_test <- weather_xreg[(nobs - n_for + 1):nobs, ]
+
+# For July 2010 validation (first 31 days of test)
+weather_july2010 <- weather_test[1:31, ]
+observed_july2010 <- data_full$avg_load[(nobs - n_for + 1):(nobs - n_for + 31)]
+
+# Verify msts structure preserved
+cat("demand_train class:", class(demand_train), "\n")
+
+autoplot(demand_train)
+autoplot(demand_test)
+```
+
+## Fit Neural Network with Fourier Terms and Weather
+
+Following class example from Module 9.
+NNETAR uses lagged values and can include xreg for exogenous variables.
+We'll use Fourier terms K=c(2,4) plus weather variables.
+
+```{r}
+# Neural Network with Fourier terms and weather variables
+# p = number of non-seasonal lags
+# P = number of seasonal lags (0 since we use Fourier for seasonality)
+# xreg = exogenous regressors (Fourier terms + weather)
+
+NN_weather_fit <- nnetar(demand_train,
+                        p = 1,
+                        P = 0,
+                        xreg = cbind(fourier(demand_train, K = c(2, 4)),
+                                    weather_train))
+
+print(NN_weather_fit)
+```
+
+## Forecast for Validation (July 2010)
+
+```{r}
+# Forecast with Neural Network
+# Need to provide fourier terms AND weather data for forecast period
+NN_weather_for <- forecast(NN_weather_fit,
+                           h = 31,
+                           xreg = cbind(fourier(demand_train, K = c(2, 4), h = 31),
+                                       weather_july2010))
+
+# Plot forecasting results
+autoplot(NN_weather_for) +
+  ylab("Average Daily Load (kWh)") +
+  ggtitle("Neural Network + Weather: Forecast")
+```
+
+## Plot Forecast vs Observed for July 2010
+
+```{r}
+autoplot(demand_test) +
+  autolayer(NN_weather_for, series="NN+Weather", PI=FALSE) +
+  coord_cartesian(xlim = c(2010.5, 2010.5 + 31/365.25)) +
+  ylab("Average Daily Load (kWh)") +
+  xlab("Date") +
+  labs(title = "Neural Network+Weather: Forecast vs. Observed - July 2010",
+       color = "") +
+  theme_classic()
+```
+
+## Check Accuracy
+
+```{r}
+NN_weather_scores <- accuracy(NN_weather_for$mean, observed_july2010)
+
+scores_df <- as.data.frame(NN_weather_scores)
+row.names(scores_df) <- c("NN+Weather")
+
+kbl(scores_df,
+    caption = "Neural Network+Weather Forecast Accuracy - July 2010 Validation",
+    digits = array(4, ncol(scores_df))) %>%
+  kable_styling(full_width = FALSE, position = "center",
+                latex_options = "hold_position")
+```
+
+## Final Forecast for July 2011
+
+Retrain on the full dataset (Jan 2005 - Jun 2011) and forecast July 2011.
+
+**NOTE**: Using July 2010 weather as proxy for July 2011 (reasonable seasonal assumption).
+
+```{r}
+# Extract July 2010 weather
+july2010_weather <- weather_xreg[(nobs - n_for + 1):(nobs - n_for + 31), ]
+
+# Retrain Neural Network on full data
+NN_weather_final <- nnetar(demand_msts,
+                          p = 1,
+                          P = 0,
+                          xreg = cbind(fourier(demand_msts, K = c(2, 4)),
+                                      weather_xreg))
+
+# Forecast July 2011
+NN_weather_final_for <- forecast(NN_weather_final,
+                                h = 31,
+                                xreg = cbind(fourier(demand_msts, K = c(2, 4), h = 31),
+                                            july2010_weather))
+
+autoplot(NN_weather_final_for) +
+  ylab("Average Daily Load (kWh)") +
+  xlab("Year") +
+  ggtitle("Neural Network+Weather: July 2011 Forecast") +
+  theme_classic()
+```
+
+## Export Forecast for Kaggle
+
+```{r}
+july2011_dates <- seq(as.Date("2011-07-01"), as.Date("2011-07-31"), by = "day")
+
+submission <- data.frame(
+  date = july2011_dates,
+  load = as.numeric(NN_weather_final_for$mean)
+)
+
+write.csv(submission,
+          file = "Submissions/gilman_salzberg_nn_weather.csv",
+          row.names = FALSE)
+
+head(submission)
+```

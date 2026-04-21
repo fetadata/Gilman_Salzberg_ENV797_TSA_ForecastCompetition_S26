@@ -1,6 +1,7 @@
 ---
-title: "Seasonal Naive Model 2"
-date: "2026-04-02"
+title: "TBATS Model"
+author: "Gilman Salzberg"
+date: "2026-04-15"
 output: pdf_document
 editor_options:
   chunk_output_type: console
@@ -22,6 +23,8 @@ library(forecast)
 library(tidyverse)
 library(kableExtra)
 library(here)
+
+
 
 ```
 
@@ -46,12 +49,19 @@ summary(demand)
 Using msts() to capture both the weekly (period = 7) and the annual cycle (period = 365.25)
 
 ```{r}
+# Create msts object
 demand_msts <- msts(demand$avg_load,
                     seasonal.periods = c(7, 365.25),
                     start = c(2005, 1))
+
+# Handle missing values (7 NAs due to DST transitions)
+demand_msts <- na.interp(demand_msts, linear = TRUE)
+
+# Verify NAs are fixed
+cat("NAs remaining:", sum(is.na(demand_msts)), "\n")
 ```
 
-## Visualize and Decompose
+## Visualize Series
 
 ```{r}
 autoplot(demand_msts) +
@@ -60,16 +70,9 @@ autoplot(demand_msts) +
   ggtitle("Daily Electricity Demand: Jan 2005 - Jun 2011")
 ```
 
-```{r}
-
-demand_msts %>%
-  mstl() %>%
-  autoplot()
-```
-
 ## Training / Test Split
 
-Train on Jan 1 2005 - June 30 2010 and test on July 1 2010 - June 31 2011
+Train on Jan 1 2005 - June 30 2010 and test on July 1 2010 - June 30 2011
 
 ```{r}
 
@@ -88,70 +91,92 @@ autoplot(demand_train)
 autoplot(demand_test)
 ```
 
-## Fit Seasonal Naive Model
+## Fit TBATS Model
+
+TBATS = Trigonometric seasonal, Box-Cox, ARMA errors, Trend, and Seasonal components
+- Automatically handles multiple seasonality
+- Automatically chooses number of harmonics
+- Can take time to fit
 
 ```{r}
-SNAIVE_for <- snaive(demand_train, h = 31)
+# TBATS can take time to fit
+TBATS_fit <- tbats(demand_train)
 
-# Residual diagnostics
-checkresiduals(SNAIVE_for)
+TBATS_for <- forecast(TBATS_fit, h = 31)
+
+# Check what TBATS selected
+print(TBATS_fit)
 ```
 
-## Check accuracy
+## Check Residuals
 
 ```{r}
-SNAIVE_scores <- accuracy(SNAIVE_for$mean, observed_july2010)
+checkresiduals(TBATS_fit)
+```
 
-scores_df <- as.data.frame(SNAIVE_scores)
-row.names(scores_df) <- c("SNAIVE")
+## Forecast Plots
+
+```{r}
+# Plot forecasting results
+autoplot(TBATS_for) +
+  ylab("Average Daily Load (kWh)") +
+  ggtitle("TBATS Forecast")
+
+# Plot model + observed data for validation
+autoplot(demand_test) +
+  autolayer(TBATS_for, series="TBATS", PI=FALSE) +
+  coord_cartesian(xlim = c(2010.5, 2010.5 + 31/365.25)) +
+  ylab("Average Daily Load (kWh)") +
+  xlab("Date") +
+  labs(title = "TBATS: Forecast vs. Observed - July 2010",
+       color = "") +
+  theme_classic()
+```
+
+## Check Accuracy
+
+```{r}
+TBATS_scores <- accuracy(TBATS_for$mean, observed_july2010)
+
+scores_df <- as.data.frame(TBATS_scores)
+row.names(scores_df) <- c("TBATS")
 
 kbl(scores_df,
-    caption = "Seasonal Naive Forecast Accuracy - July 2010 Validation",
+    caption = "TBATS Forecast Accuracy - July 2010 Validation",
     digits = array(4, ncol(scores_df))) %>%
   kable_styling(full_width = FALSE, position = "center",
                 latex_options = "hold_position")
 ```
 
-## Plot forecast vs observed for July 2010
-
-```{r}
-
-autoplot(demand_test) +
-  autolayer(SNAIVE_for, PI=FALSE, series="Seasonal Naive") +
-  coord_cartesian(xlim = c(2010.5, 2010.5 + 31/365.25)) +
-  ylab("Average Daily Load (kWh)") +
-  xlab("Date") +
-  labs(title = "Seasonal Naive: Forecast vs. Observed - July 2010",
-       color = "") +
-  theme_classic()
-```
-
-## Final forecast
+## Final Forecast
 
 Retrain on the full dataset (Jan 2005 - Jun 2011) and forecast July 2011
 
 ```{r}
 
-SNAIVE_final <- snaive(demand_msts, h = 31)
-autoplot(SNAIVE_final) +
+TBATS_final <- tbats(demand_msts)
+
+TBATS_final_for <- forecast(TBATS_final, h = 31)
+
+autoplot(TBATS_final_for) +
   ylab("Average Daily Load (kWh)") +
   xlab("Year") +
-  ggtitle("Seasonal Naive: July 2011 Forecast") +
+  ggtitle("TBATS: July 2011 Forecast") +
   theme_classic()
 ```
 
-## Export forecast for Kaggle
+## Export Forecast for Kaggle
 
 ```{r}
 july2011_dates <- seq(as.Date("2011-07-01"), as.Date("2011-07-31"), by = "day")
 
 submission <- data.frame(
   date = july2011_dates,
-  load = as.numeric(SNAIVE_final$mean)
+  load = as.numeric(TBATS_final_for$mean)
 )
 
 write.csv(submission,
-          file = "Submissions/gilman_salzberg_snaive2.csv",
+          file = "Submissions/gilman_salzberg_tbats.csv",
           row.names = FALSE)
 
 head(submission)
