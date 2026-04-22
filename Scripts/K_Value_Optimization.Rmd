@@ -1,0 +1,271 @@
+---
+title: "K Value Optimization - ARIMA+Fourier+Weather"
+author: "Gilman Salzberg"
+date: "2026-04-21"
+output: pdf_document
+editor_options:
+  chunk_output_type: console
+---
+
+## Setup
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+```
+
+```{r packages}
+rm(list = ls())
+
+library(lubridate)
+library(ggplot2)
+library(forecast)
+library(tidyverse)
+library(kableExtra)
+library(here)
+```
+
+## Load Data
+
+```{r}
+here()
+demand <- read.csv("Data/Processed/CleanDemand_v1.csv") %>%
+  select(-X) %>%
+  mutate(date = ymd(date))
+
+temp <- read.csv("Data/Processed/CleanTemp_v1.csv") %>%
+  select(-X) %>%
+  mutate(date = ymd(date))
+
+humidity <- read.csv("Data/Processed/CleanHumidity_v1.csv") %>%
+  select(-X) %>%
+  mutate(date = ymd(date))
+
+data_full <- demand %>%
+  left_join(temp, by = "date") %>%
+  left_join(humidity, by = "date")
+
+nobs <- nrow(data_full)
+```
+
+## Create Clean Time Series Objects
+
+```{r}
+# Handle NAs BEFORE creating msts
+demand_clean <- na.interp(data_full$avg_load, linear = TRUE)
+demand_msts <- msts(demand_clean,
+                    seasonal.periods = c(7, 365.25),
+                    start = c(2005, 1))
+
+# Weather matrix
+weather_xreg <- cbind(temp = data_full$avg_temp,
+                      humid = data_full$avg_humidity)
+```
+
+## Training / Validation Split
+
+```{r}
+n_for <- 365
+
+# Training data
+train_load <- data_full$avg_load[1:(nobs - n_for)]
+train_load_clean <- na.interp(train_load, linear = TRUE)
+demand_train <- msts(train_load_clean,
+                     seasonal.periods = c(7, 365.25),
+                     start = c(2005, 1))
+
+# Weather split
+weather_train <- weather_xreg[1:(nobs - n_for), ]
+weather_test <- weather_xreg[(nobs - n_for + 1):nobs, ]
+weather_july2010 <- weather_test[1:31, ]
+observed_july2010 <- data_full$avg_load[(nobs - n_for + 1):(nobs - n_for + 31)]
+
+cat("Training observations:", length(demand_train), "\n")
+cat("Validation observations:", 31, "\n")
+```
+
+## Test Multiple K Configurations
+
+This section tests various K values to find optimal Fourier harmonics.
+
+```{r}
+# Define K configurations to test
+K_configs <- list(
+  c(1, 4),   # Simple weekly, moderate annual
+  c(2, 4),   # Current best
+  c(3, 4),   # More weekly detail
+  c(1, 6),   # Simple weekly, more annual
+  c(2, 6),   # Moderate weekly, more annual
+  c(3, 6),   # More weekly, more annual
+  c(2, 8),   # Moderate weekly, high annual
+  c(3, 8),   # High weekly, high annual
+  c(4, 8),   # Very high detail (might overfit)
+  c(2, 10),  # Moderate weekly, very high annual
+  c(1, 8)    # Simple weekly, high annual
+)
+
+# Storage for results
+results_list <- list()
+
+# Test each K configuration
+cat("\n=== TESTING K CONFIGURATIONS ===\n\n")
+
+for(i in 1:length(K_configs)) {
+  K_val <- K_configs[[i]]
+  
+  cat("Testing K =", K_val, "...\n")
+  
+  # Fit model
+  model <- auto.arima(demand_train,
+                      seasonal = FALSE,
+                      lambda = 0,
+                      xreg = cbind(fourier(demand_train, K = K_val),
+                                  weather_train))
+  
+  # Forecast validation period
+  forecast_val <- forecast(model,
+                          h = 31,
+                          xreg = cbind(fourier(demand_train, K = K_val, h = 31),
+                                      weather_july2010))
+  
+  # Calculate accuracy
+  acc <- accuracy(forecast_val$mean, observed_july2010)
+  
+  # Store results
+  results_list[[i]] <- data.frame(
+    K_weekly = K_val[1],
+    K_annual = K_val[2],
+    RMSE = acc[2],
+    MAE = acc[3],
+    MAPE = acc[5],
+    AIC = model$aic,
+    stringsAsFactors = FALSE
+  )
+  
+  cat("  RMSE:", round(acc[2], 2), "| MAPE:", round(acc[5], 2), "%\n\n")
+}
+
+# Combine results
+results_df <- bind_rows(results_list)
+results_df <- results_df %>%
+  arrange(RMSE) %>%
+  mutate(Rank = row_number())
+
+cat("\n=== FINAL RANKINGS ===\n")
+print(results_df)
+```
+
+## Display Results Table
+
+```{r}
+kbl(results_df,
+    caption = "K Value Optimization Results - Ranked by RMSE",
+    digits = 4) %>%
+  kable_styling(full_width = FALSE, position = "center",
+                latex_options = "hold_position") %>%
+  row_spec(1, bold = TRUE, background = "#90EE90")  # Highlight best
+```
+
+## Generate Final Forecasts for Top 5 K Values
+
+```{r}
+# Get top 5 K configurations
+top5_K <- results_df %>%
+  slice(1:5) %>%
+  select(K_weekly, K_annual)
+
+cat("\n=== GENERATING KAGGLE SUBMISSIONS FOR TOP 5 ===\n\n")
+
+# Weather for July 2011
+july2010_weather <- weather_xreg[(nobs - n_for + 1):(nobs - n_for + 31), ]
+july2011_dates <- seq(as.Date("2011-07-01"), as.Date("2011-07-31"), by = "day")
+
+for(i in 1:nrow(top5_K)) {
+  K_val <- c(top5_K$K_weekly[i], top5_K$K_annual[i])
+  
+  cat("Generating submission for K =", K_val, "\n")
+  
+  # Retrain on full data
+  model_final <- auto.arima(demand_msts,
+                            seasonal = FALSE,
+                            lambda = 0,
+                            xreg = cbind(fourier(demand_msts, K = K_val),
+                                        weather_xreg))
+  
+  # Forecast July 2011
+  forecast_final <- forecast(model_final,
+                            h = 31,
+                            xreg = cbind(fourier(demand_msts, K = K_val, h = 31),
+                                        july2010_weather))
+  
+  # Create submission file
+  submission <- data.frame(
+    date = july2011_dates,
+    load = as.numeric(forecast_final$mean)
+  )
+  
+  # Save with descriptive filename
+  filename <- paste0("Submissions/k_optimization/gilman_salzberg_arima_weather_K",
+                    K_val[1], "_", K_val[2], ".csv")
+  write.csv(submission, file = filename, row.names = FALSE)
+  
+  cat("  Saved:", filename, "\n")
+}
+
+cat("\n=== COMPLETE ===\n")
+cat("Generated", nrow(top5_K), "Kaggle submission files\n")
+cat("Submit all files to Kaggle and compare scores!\n")
+```
+
+## Best Model Summary
+
+```{r}
+best_K <- c(results_df$K_weekly[1], results_df$K_annual[1])
+
+cat("\n=== BEST CONFIGURATION ===\n")
+cat("K =", best_K, "\n")
+cat("Validation RMSE:", round(results_df$RMSE[1], 2), "\n")
+cat("Validation MAPE:", round(results_df$MAPE[1], 2), "%\n")
+cat("\nThis is your strongest candidate for the leaderboard!\n")
+```
+
+## Plot Top 3 Forecasts
+
+```{r fig.height=8, fig.width=10}
+# Compare top 3 visually
+top3_forecasts <- list()
+
+for(i in 1:3) {
+  K_val <- c(results_df$K_weekly[i], results_df$K_annual[i])
+  
+  model <- auto.arima(demand_train,
+                      seasonal = FALSE,
+                      lambda = 0,
+                      xreg = cbind(fourier(demand_train, K = K_val),
+                                  weather_train))
+  
+  forecast_val <- forecast(model,
+                          h = 31,
+                          xreg = cbind(fourier(demand_train, K = K_val, h = 31),
+                                      weather_july2010))
+  
+  top3_forecasts[[i]] <- forecast_val
+}
+
+# Create comparison plot
+test_load <- data_full$avg_load[(nobs - n_for + 1):nobs]
+test_load_clean <- na.interp(test_load, linear = TRUE)
+demand_test <- msts(test_load_clean,
+                    seasonal.periods = c(7, 365.25),
+                    start = c(2010, 182))
+
+autoplot(demand_test) +
+  autolayer(top3_forecasts[[1]], series = paste0("K=", results_df$K_weekly[1], ",", results_df$K_annual[1]), PI=FALSE) +
+  autolayer(top3_forecasts[[2]], series = paste0("K=", results_df$K_weekly[2], ",", results_df$K_annual[2]), PI=FALSE) +
+  autolayer(top3_forecasts[[3]], series = paste0("K=", results_df$K_weekly[3], ",", results_df$K_annual[3]), PI=FALSE) +
+  coord_cartesian(xlim = c(2010.5, 2010.5 + 31/365.25)) +
+  ylab("Average Daily Load (kWh)") +
+  xlab("Date") +
+  labs(title = "Top 3 K Configurations - July 2010 Validation",
+       color = "Model") +
+  theme_classic()
+```

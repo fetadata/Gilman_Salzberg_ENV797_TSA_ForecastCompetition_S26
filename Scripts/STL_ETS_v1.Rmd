@@ -1,0 +1,273 @@
+---
+title: "STL+ETS Model"
+author: "Gilman Salzberg"
+date: "2026-04-21"
+output: pdf_document
+editor_options:
+  chunk_output_type: console
+---
+
+## Setup
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+```
+
+```{r packages}
+rm(list = ls())
+
+library(lubridate)
+library(ggplot2)
+library(forecast)
+library(tidyverse)
+library(kableExtra)
+library(here)
+```
+
+## Load Processed Data
+
+```{r}
+here()
+demand <- read.csv("Data/Processed/CleanDemand_v1.csv") %>%
+  select(-X) %>%
+  mutate(date = ymd(date))
+
+nobs <- nrow(demand)
+
+head(demand)
+summary(demand)
+```
+
+## Create msts Object
+
+```{r}
+# Handle NAs before creating msts
+demand_clean <- na.interp(demand$avg_load, linear = TRUE)
+
+demand_msts <- msts(demand_clean,
+                    seasonal.periods = c(7, 365.25),
+                    start = c(2005, 1))
+
+cat("NAs remaining:", sum(is.na(demand_msts)), "\n")
+```
+
+## Visualize Series
+
+```{r}
+autoplot(demand_msts) +
+  ylab("Average Daily Load (kWh)") +
+  xlab("Year") +
+  ggtitle("Daily Electricity Demand: Jan 2005 - Jun 2011")
+```
+
+## Training / Test Split
+
+```{r}
+n_for <- 365
+
+# Recreate msts for training (don't use subset - loses msts structure)
+train_load <- demand$avg_load[1:(nobs - n_for)]
+train_load_clean <- na.interp(train_load, linear = TRUE)
+demand_train <- msts(train_load_clean,
+                     seasonal.periods = c(7, 365.25),
+                     start = c(2005, 1))
+
+# Test data
+test_load <- demand$avg_load[(nobs - n_for + 1):nobs]
+test_load_clean <- na.interp(test_load, linear = TRUE)
+demand_test <- msts(test_load_clean,
+                    seasonal.periods = c(7, 365.25),
+                    start = c(2010, 182))
+
+# Validation observations
+observed_july2010 <- demand$avg_load[(nobs - n_for + 1):(nobs - n_for + 31)]
+
+autoplot(demand_train)
+autoplot(demand_test)
+```
+
+## Fit STL+ETS Model
+
+STL = Seasonal-Trend decomposition using Loess
+ETS = Error-Trend-Seasonal exponential smoothing
+
+This is a 2-step hybrid approach:
+1. STL decomposes the series into trend, seasonal, and remainder
+2. ETS forecasts the seasonally-adjusted series
+3. Seasonal component is added back
+
+```{r}
+cat("Fitting STL+ETS model...\n")
+
+# STL + ETS with periodic seasonal window
+ETS_fit <- stlf(demand_train, 
+                h = 31,
+                s.window = "periodic")
+
+print(ETS_fit)
+
+# Check the ETS model selected
+cat("\nETS model selected:", ETS_fit$model$method, "\n")
+```
+
+## Check Residuals
+
+```{r}
+checkresiduals(ETS_fit)
+```
+
+## Forecast Plots
+
+```{r}
+# Plot forecasting results
+autoplot(ETS_fit) +
+  ylab("Average Daily Load (kWh)") +
+  ggtitle("STL+ETS Forecast")
+
+# Plot model + observed data for validation
+autoplot(demand_test) +
+  autolayer(ETS_fit, series="STL+ETS", PI=FALSE) +
+  coord_cartesian(xlim = c(2010.5, 2010.5 + 31/365.25)) +
+  ylab("Average Daily Load (kWh)") +
+  xlab("Date") +
+  labs(title = "STL+ETS: Forecast vs. Observed - July 2010",
+       color = "") +
+  theme_classic()
+```
+
+## Check Accuracy
+
+```{r}
+ETS_scores <- accuracy(ETS_fit$mean, observed_july2010)
+
+scores_df <- as.data.frame(ETS_scores)
+row.names(scores_df) <- c("STL+ETS")
+
+kbl(scores_df,
+    caption = "STL+ETS Forecast Accuracy - July 2010 Validation",
+    digits = array(4, ncol(scores_df))) %>%
+  kable_styling(full_width = FALSE, position = "center",
+                latex_options = "hold_position")
+
+cat("\nSTL+ETS Validation Performance:\n")
+cat("RMSE:", round(ETS_scores[2], 2), "\n")
+cat("MAPE:", round(ETS_scores[5], 2), "%\n")
+```
+
+## Try Alternative STL+ETS Configurations
+
+```{r}
+cat("\n=== TESTING ALTERNATIVE CONFIGURATIONS ===\n\n")
+
+# Configuration 1: Robust STL (resistant to outliers)
+cat("1. Robust STL...\n")
+ETS_robust <- stlf(demand_train, 
+                   h = 31,
+                   s.window = "periodic",
+                   robust = TRUE)
+acc_robust <- accuracy(ETS_robust$mean, observed_july2010)
+
+# Configuration 2: Different seasonal window
+cat("2. STL with s.window=13...\n")
+ETS_s13 <- stlf(demand_train, 
+                h = 31,
+                s.window = 13)
+acc_s13 <- accuracy(ETS_s13$mean, observed_july2010)
+
+# Configuration 3: Force specific ETS model (damped trend)
+cat("3. STL + ETS(A,Ad,A)...\n")
+ETS_damped <- stlf(demand_train,
+                   h = 31,
+                   s.window = "periodic",
+                   etsmodel = "ZZZ",  # Auto-select
+                   damped = TRUE)
+acc_damped <- accuracy(ETS_damped$mean, observed_july2010)
+
+# Compare all configurations
+config_results <- data.frame(
+  Configuration = c("Standard", "Robust", "s.window=13", "Damped Trend"),
+  RMSE = c(ETS_scores[2], acc_robust[2], acc_s13[2], acc_damped[2]),
+  MAE = c(ETS_scores[3], acc_robust[3], acc_s13[3], acc_damped[3]),
+  MAPE = c(ETS_scores[5], acc_robust[5], acc_s13[5], acc_damped[5])
+) %>%
+  arrange(RMSE) %>%
+  mutate(Rank = row_number())
+
+kbl(config_results,
+    caption = "STL+ETS Configuration Comparison",
+    digits = 4) %>%
+  kable_styling(full_width = FALSE, position = "center",
+                latex_options = "hold_position") %>%
+  row_spec(1, bold = TRUE, background = "#90EE90")
+
+cat("\nBest configuration:", config_results$Configuration[1], "\n")
+```
+
+## Final Forecast for July 2011
+
+Retrain on full dataset and forecast July 2011
+
+```{r}
+cat("\n=== GENERATING FINAL FORECASTS ===\n\n")
+
+# Refit all configurations on full data
+cat("Refitting models on full dataset...\n")
+
+ETS_final_standard <- stlf(demand_msts, h = 31, s.window = "periodic")
+
+ETS_final_robust <- stlf(demand_msts, h = 31, s.window = "periodic", robust = TRUE)
+
+ETS_final_s13 <- stlf(demand_msts, h = 31, s.window = 13)
+
+ETS_final_damped <- stlf(demand_msts, h = 31, s.window = "periodic", 
+                         etsmodel = "ZZZ", damped = TRUE)
+
+# Plot final forecast
+autoplot(ETS_final_standard) +
+  ylab("Average Daily Load (kWh)") +
+  xlab("Year") +
+  ggtitle("STL+ETS: July 2011 Forecast (Standard)") +
+  theme_classic()
+```
+
+## Export Forecasts for Kaggle
+
+```{r}
+july2011_dates <- seq(as.Date("2011-07-01"), as.Date("2011-07-31"), by = "day")
+
+# Save all 4 configurations
+configs <- list(
+  list(name = "standard", model = ETS_final_standard),
+  list(name = "robust", model = ETS_final_robust),
+  list(name = "s13", model = ETS_final_s13),
+  list(name = "damped", model = ETS_final_damped)
+)
+
+for(config in configs) {
+  submission <- data.frame(
+    date = july2011_dates,
+    load = as.numeric(config$model$mean)
+  )
+  
+  filename <- paste0("Submissions/STL_ETS/gilman_salzberg_ets_", config$name, ".csv")
+  write.csv(submission, file = filename, row.names = FALSE)
+  cat("Saved:", filename, "\n")
+}
+
+cat("\n=== COMPLETE ===\n")
+cat("Generated 4 STL+ETS submission files\n")
+cat("Submit the best performing configuration based on validation!\n")
+```
+
+## Summary
+
+```{r}
+cat("\n=== STL+ETS SUMMARY ===\n\n")
+cat("Best Configuration:", config_results$Configuration[1], "\n")
+cat("Validation RMSE:", round(config_results$RMSE[1], 2), "\n")
+cat("Validation MAPE:", round(config_results$MAPE[1], 2), "%\n\n")
+
+cat("STL+ETS is fast, stable, and often competitive!\n")
+cat("It handles trend and seasonality automatically.\n")
+cat("Submit to Kaggle and compare with your other models.\n")
+```

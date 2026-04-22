@@ -1,0 +1,375 @@
+---
+title: "Kaggle Submission Analysis"
+author: "Gilman Salzberg"
+date: "2026-04-21"
+output: pdf_document
+editor_options:
+  chunk_output_type: console
+---
+
+## Setup
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE, fig.width=12, fig.height=8)
+```
+
+```{r packages}
+library(tidyverse)
+library(here)
+library(lubridate)
+
+here()
+```
+
+## Load All Kaggle Submissions
+
+```{r}
+# Get all CSV files in Submissions folder (including subfolders)
+submission_files <- list.files("Submissions", 
+                              pattern = "*.csv", 
+                              full.names = TRUE, 
+                              recursive = TRUE)
+
+# Exclude the template file
+submission_files <- submission_files[!grepl("template", submission_files)]
+
+cat("Found", length(submission_files), "submission files\n\n")
+
+# Load all submissions into a list
+submissions_list <- list()
+
+for(file in submission_files) {
+  # Extract model name from filename
+  model_name <- gsub("gilman_salzberg_", "", basename(file))
+  model_name <- gsub(".csv", "", model_name)
+  
+  # Load data
+  data <- read.csv(file)
+  data$model <- model_name
+  data$date <- ymd(data$date)
+  
+  submissions_list[[model_name]] <- data
+  
+  cat("Loaded:", model_name, "- Mean forecast:", round(mean(data$load), 0), "\n")
+}
+
+# Combine all submissions
+all_submissions <- bind_rows(submissions_list)
+
+# Remove models with NA dates
+all_submissions <- all_submissions %>%
+  filter(!is.na(date))
+
+cat("Removed rows with NA dates\n")
+cat("\nTotal submissions loaded:", length(unique(all_submissions$model)), "\n")
+
+
+```
+
+## Your Known Kaggle Scores
+
+Manually enter the scores you've seen on Kaggle:
+
+```{r}
+
+kaggle_scores <- data.frame(
+  model = c("advanced_bayesian_v2", "optimized_trimmed", "advanced_winsorized", 
+            "ULTIMATE_v2", "ensemble_top3", "optimized_diverse",
+            "top3_kaggle_ensemblev2", "advanced_trimmed25", "advanced_trimmed20_v2",
+            "optimized_median", "optimized_top3_weighted", "optimized_smoothed", 
+            "top3_kaggle_ensemble", "ensemble_simple", "ensemble_weighted",
+            "arima_fourier_weather", "advanced_stacked_v2", "arima_weather_K2_8", 
+            "arima_weather_K3_8", "arima_weather_K3_6", "arima_weather_K2_6", 
+            "ensemble_arima_only", "tbats", "ensemble_best2", "ets_s13", 
+            "arima_weather_K1_6", "advanced_hybrid_v2", "nn_weather", 
+            "ets_robust", "arima_fourier", "snaive2", "ets_damped", "ets_standard"),
+  score = c(0.1003, 0.1008, 0.1013, 0.1014, 0.1015, 0.1015, 0.1017, 0.1018, 0.1018,
+            0.1019, 0.1019, 0.1022, 0.1023, 0.1025, 0.1037, 0.1039, 0.1040,
+            0.1060, 0.1062, 0.1078, 0.1079, 0.1082, 0.1110, 0.1121, 0.1318,
+            0.1321, 0.1323, 0.1331, 0.1465, 0.1528, 0.1602, 0.1647, 0.1648),
+  stringsAsFactors = FALSE
+)
+
+# Remove duplicates (keep best score for each model)
+kaggle_scores <- kaggle_scores %>%
+  group_by(model) %>%
+  slice_min(score, n = 1) %>%
+  ungroup()
+
+# Sort by score
+kaggle_scores <- kaggle_scores %>%
+  arrange(score) %>%
+  mutate(rank = row_number())
+
+cat("Total models with Kaggle scores:", nrow(kaggle_scores), "\n")
+cat("Best score:", min(kaggle_scores$score), "\n")
+cat("Worst score:", max(kaggle_scores$score), "\n")
+print(kaggle_scores)
+```
+
+## Summary Statistics for Each Submission
+
+```{r}
+submission_stats <- all_submissions %>%
+  group_by(model) %>%
+  summarize(
+    mean_forecast = mean(load),
+    min_forecast = min(load),
+    max_forecast = max(load),
+    sd_forecast = sd(load),
+    range = max_forecast - min_forecast
+  ) %>%
+  left_join(kaggle_scores, by = "model") %>%
+  arrange(score)
+
+knitr::kable(submission_stats, digits = 2,
+             caption = "Forecast Statistics by Model (Ranked by Kaggle Score)")
+```
+
+## Plot All Submissions Together
+
+```{r fig.height=10, fig.width=14}
+# Color code by performance
+all_submissions_scored <- all_submissions %>%
+  left_join(kaggle_scores %>% select(model, score), by = "model")
+
+# Plot all forecasts
+ggplot(all_submissions_scored, aes(x = date, y = load, color = model, group = model)) +
+  geom_line(alpha = 0.7, size = 0.8) +
+  scale_x_date(date_breaks = "3 days", date_labels = "%b %d") +
+  labs(title = "All Kaggle Submissions - July 2011 Forecasts",
+       subtitle = paste(length(unique(all_submissions$model)), "different models"),
+       x = "Date",
+       y = "Forecasted Load (kWh)",
+       color = "Model") +
+  theme_minimal() +
+  theme(legend.position = "right",
+        axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+## Plot Top 5 vs Bottom 5 Performers
+
+```{r fig.height=8}
+top5_models <- kaggle_scores %>% slice(1:5) %>% pull(model)
+bottom5_models <- kaggle_scores %>% slice((n()-4):n()) %>% pull(model)
+
+# Top 5
+top5_data <- all_submissions %>%
+  filter(model %in% top5_models) %>%
+  left_join(kaggle_scores, by = "model")
+
+ggplot(top5_data, aes(x = date, y = load, color = reorder(model, score), group = model)) +
+  geom_line(size = 1.2) +
+  scale_x_date(date_breaks = "3 days", date_labels = "%b %d") +
+  labs(title = "Top 5 Best Performing Models on Kaggle",
+       x = "Date",
+       y = "Forecasted Load (kWh)",
+       color = "Model (by score)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Bottom 5
+bottom5_data <- all_submissions %>%
+  filter(model %in% bottom5_models) %>%
+  left_join(kaggle_scores, by = "model")
+
+ggplot(bottom5_data, aes(x = date, y = load, color = reorder(model, -score), group = model)) +
+  geom_line(size = 1.2) +
+  scale_x_date(date_breaks = "3 days", date_labels = "%b %d") +
+  labs(title = "Bottom 5 Worst Performing Models on Kaggle",
+       x = "Date",
+       y = "Forecasted Load (kWh)",
+       color = "Model (by score)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+## Identify Common Patterns
+
+```{r}
+
+# Calculate correlation between forecasts
+forecast_wide <- all_submissions %>%
+  select(date, model, load) %>%
+  pivot_wider(names_from = model, values_from = load)
+
+# Unlist all columns except date
+for(col in names(forecast_wide)[-1]) {
+  forecast_wide[[col]] <- unlist(forecast_wide[[col]])
+}
+
+# Remove date column for correlation
+numeric_cols <- forecast_wide %>% select(-date)
+
+# Calculate correlation
+cor_matrix <- cor(numeric_cols, use = "pairwise.complete.obs")
+
+# Find which models are most similar
+cat("\n=== MOST CORRELATED MODELS ===\n")
+cor_df <- as.data.frame(as.table(cor_matrix))
+names(cor_df) <- c("Model1", "Model2", "Correlation")
+cor_df <- cor_df %>%
+  filter(Model1 != Model2, Correlation < 1) %>%
+  arrange(desc(Correlation)) %>%
+  distinct(Correlation, .keep_all = TRUE) %>%
+  slice(1:10)
+
+print(cor_df)
+
+```
+
+
+
+## Day-by-Day Variation Analysis
+
+Which days are hardest to predict?
+
+```{r fig.height=6}
+# Use only good models (score < 0.11)
+good_model_names <- kaggle_scores %>% filter(score < 0.11) %>% pull(model)
+
+# Calculate range of predictions for each day (WINNERS ONLY)
+day_variation <- all_submissions %>%
+  filter(model %in% good_model_names) %>%
+  group_by(date) %>%
+  summarize(
+    min_pred = min(load),
+    max_pred = max(load),
+    mean_pred = mean(load),
+    range = max_pred - min_pred,
+    cv = sd(load) / mean(load) * 100  # Coefficient of variation
+  )
+
+ggplot(day_variation, aes(x = date)) +
+  geom_ribbon(aes(ymin = min_pred, ymax = max_pred), alpha = 0.3, fill = "blue") +
+  geom_line(aes(y = mean_pred), color = "red", size = 1.2) +
+  scale_x_date(date_breaks = "3 days", date_labels = "%b %d") +
+  labs(title = "Range of TOP Model Predictions by Day (Score < 0.11)",
+       subtitle = "Red line = mean prediction, Blue band = min to max range",
+       x = "Date",
+       y = "Load (kWh)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Which days have highest disagreement AMONG WINNERS?
+cat("\n=== DAYS WITH HIGHEST DISAGREEMENT (TOP MODELS ONLY) ===\n")
+print(day_variation %>% arrange(desc(range)) %>% select(date, range, cv) %>% head(10))
+```
+
+## Best Model Analysis
+
+```{r}
+best_model <- kaggle_scores$model[1]
+best_forecast <- all_submissions %>% filter(model == best_model)
+
+cat("\n=== BEST MODEL: ", best_model, "===\n")
+cat("Kaggle Score:", kaggle_scores$score[1], "\n\n")
+
+cat("Forecast Summary:\n")
+summary(best_forecast$load)
+
+# Compare to ensemble average
+ensemble_avg <- all_submissions %>%
+  group_by(date) %>%
+  summarize(avg_load = mean(load))
+
+comparison <- best_forecast %>%
+  left_join(ensemble_avg, by = "date") %>%
+  mutate(diff = load - avg_load)
+
+cat("\nHow different from ensemble average?\n")
+cat("Mean difference:", round(mean(comparison$diff), 2), "\n")
+cat("Max difference:", round(max(abs(comparison$diff)), 2), "\n")
+
+ggplot(comparison, aes(x = date)) +
+  geom_line(aes(y = load, color = "Best Model"), size = 1.2) +
+  geom_line(aes(y = avg_load, color = "Ensemble Avg"), size = 1.2, linetype = "dashed") +
+  scale_x_date(date_breaks = "3 days", date_labels = "%b %d") +
+  labs(title = paste("Best Model (", best_model, ") vs Ensemble Average"),
+       x = "Date",
+       y = "Load (kWh)",
+       color = "") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## Recommendations Based on Analysis
+
+```{r}
+cat("\n=== ANALYSIS INSIGHTS ===\n\n")
+
+# 1. Check if best models are conservative or aggressive
+best3_avg <- all_submissions %>%
+  filter(model %in% top5_models[1:3]) %>%
+  summarize(mean_load = mean(load)) %>%
+  pull(mean_load)
+
+overall_avg <- mean(all_submissions$load)
+
+if(best3_avg < overall_avg) {
+  cat("1. Best models predict LOWER than average\n")
+  cat("   → Try models that predict conservatively\n\n")
+} else {
+  cat("1. Best models predict HIGHER than average\n")
+  cat("   → Try more aggressive forecasts\n\n")
+}
+
+# 2. Check variability
+best3_sd <- all_submissions %>%
+  filter(model %in% top5_models[1:3]) %>%
+  group_by(model) %>%
+  summarize(sd = sd(load)) %>%
+  summarize(mean_sd = mean(sd)) %>%
+  pull(mean_sd)
+
+overall_sd <- all_submissions %>%
+  group_by(model) %>%
+  summarize(sd = sd(load)) %>%
+  summarize(mean_sd = mean(sd)) %>%
+  pull(mean_sd)
+
+if(best3_sd < overall_sd) {
+  cat("2. Best models are SMOOTHER (less variable)\n")
+  cat("   → Try removing high-frequency noise\n\n")
+} else {
+  cat("2. Best models are MORE VARIABLE\n")
+  cat("   → Try capturing more day-to-day variation\n\n")
+}
+
+# 3. Model diversity
+cat("3. You have", length(unique(all_submissions$model)), "submissions\n")
+cat("   Top teams have 20-24 submissions\n")
+cat("   → Keep iterating! More submissions = more chances\n\n")
+
+cat("4. Try creating a custom ensemble of your top 3 Kaggle performers\n")
+cat("   Models:", paste(top5_models[1:3], collapse = ", "), "\n")
+```
+
+## Generate New Ensemble from Top Performers
+
+```{r}
+cat("\n=== CREATING NEW ENSEMBLE FROM TOP 3 KAGGLE PERFORMERS ===\n\n")
+
+top3_ensemble <- all_submissions %>%
+  filter(model %in% top5_models[1:3]) %>%
+  group_by(date) %>%
+  summarize(load = mean(load))
+
+# Save submission
+submission <- data.frame(
+  date = top3_ensemble$date,
+  load = top3_ensemble$load
+)
+
+write.csv(submission,
+          file = "Submissions/ensemble_models/gilman_salzberg_top3_kaggle_ensemblev2.csv",
+          row.names = FALSE)
+
+cat("Created: gilman_salzberg_top3_kaggle_ensemble.csv\n")
+cat("This averages your 3 best Kaggle performers\n")
+cat("\nForecast summary:\n")
+summary(submission$load)
+```

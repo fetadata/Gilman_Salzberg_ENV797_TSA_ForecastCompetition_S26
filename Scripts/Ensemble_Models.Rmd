@@ -1,0 +1,362 @@
+---
+title: "Ensemble Models - Multiple Approaches"
+author: "Gilman Salzberg"
+date: "2026-04-21"
+output: pdf_document
+editor_options:
+  chunk_output_type: console
+---
+
+## Setup
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+```
+
+```{r packages}
+rm(list = ls())
+
+library(lubridate)
+library(ggplot2)
+library(forecast)
+library(tidyverse)
+library(kableExtra)
+library(here)
+```
+
+## Load Data
+
+```{r}
+here()
+demand <- read.csv("Data/Processed/CleanDemand_v1.csv") %>%
+  select(-X) %>%
+  mutate(date = ymd(date))
+
+temp <- read.csv("Data/Processed/CleanTemp_v1.csv") %>%
+  select(-X) %>%
+  mutate(date = ymd(date))
+
+humidity <- read.csv("Data/Processed/CleanHumidity_v1.csv") %>%
+  select(-X) %>%
+  mutate(date = ymd(date))
+
+data_full <- demand %>%
+  left_join(temp, by = "date") %>%
+  left_join(humidity, by = "date")
+
+nobs <- nrow(data_full)
+```
+
+## Create Clean Time Series Objects
+
+```{r}
+# Handle NAs
+demand_clean <- na.interp(data_full$avg_load, linear = TRUE)
+demand_msts <- msts(demand_clean,
+                    seasonal.periods = c(7, 365.25),
+                    start = c(2005, 1))
+
+weather_xreg <- cbind(temp = data_full$avg_temp,
+                      humid = data_full$avg_humidity)
+```
+
+## Training / Validation Split
+
+```{r}
+n_for <- 365
+
+train_load <- data_full$avg_load[1:(nobs - n_for)]
+train_load_clean <- na.interp(train_load, linear = TRUE)
+demand_train <- msts(train_load_clean,
+                     seasonal.periods = c(7, 365.25),
+                     start = c(2005, 1))
+
+test_load <- data_full$avg_load[(nobs - n_for + 1):nobs]
+test_load_clean <- na.interp(test_load, linear = TRUE)
+demand_test <- msts(test_load_clean,
+                    seasonal.periods = c(7, 365.25),
+                    start = c(2010, 182))
+
+weather_train <- weather_xreg[1:(nobs - n_for), ]
+weather_test <- weather_xreg[(nobs - n_for + 1):nobs, ]
+weather_july2010 <- weather_test[1:31, ]
+observed_july2010 <- data_full$avg_load[(nobs - n_for + 1):(nobs - n_for + 31)]
+```
+
+## Fit Individual Models for Ensemble
+
+```{r}
+cat("Fitting individual models...\n\n")
+
+# Model 1: TBATS
+cat("1. TBATS...\n")
+TBATS_fit <- tbats(demand_train)
+TBATS_for <- forecast(TBATS_fit, h = 31)
+
+# Model 2: ARIMA+Fourier+Weather (K=2,4)
+cat("2. ARIMA+Fourier+Weather (K=2,4)...\n")
+ARIMA_24_fit <- auto.arima(demand_train,
+                           seasonal = FALSE,
+                           lambda = 0,
+                           xreg = cbind(fourier(demand_train, K = c(2, 4)),
+                                       weather_train))
+ARIMA_24_for <- forecast(ARIMA_24_fit,
+                         h = 31,
+                         xreg = cbind(fourier(demand_train, K = c(2, 4), h = 31),
+                                     weather_july2010))
+
+# Model 3: ARIMA+Fourier+Weather (K=3,6)
+cat("3. ARIMA+Fourier+Weather (K=3,6)...\n")
+ARIMA_36_fit <- auto.arima(demand_train,
+                           seasonal = FALSE,
+                           lambda = 0,
+                           xreg = cbind(fourier(demand_train, K = c(3, 6)),
+                                       weather_train))
+ARIMA_36_for <- forecast(ARIMA_36_fit,
+                         h = 31,
+                         xreg = cbind(fourier(demand_train, K = c(3, 6), h = 31),
+                                     weather_july2010))
+
+# Model 4: ARIMA+Fourier NO weather (K=2,6)
+cat("4. ARIMA+Fourier NO weather (K=2,6)...\n")
+ARIMA_26_noweather_fit <- auto.arima(demand_train,
+                                     seasonal = FALSE,
+                                     lambda = 0,
+                                     xreg = fourier(demand_train, K = c(2, 6)))
+ARIMA_26_noweather_for <- forecast(ARIMA_26_noweather_fit,
+                                   h = 31,
+                                   xreg = fourier(demand_train, K = c(2, 6), h = 31))
+
+# Model 5: Neural Network
+cat("5. Neural Network...\n")
+NN_fit <- nnetar(demand_train,
+                p = 1,
+                P = 0,
+                xreg = cbind(fourier(demand_train, K = c(2, 4)),
+                            weather_train))
+NN_for <- forecast(NN_fit,
+                  h = 31,
+                  xreg = cbind(fourier(demand_train, K = c(2, 4), h = 31),
+                              weather_july2010))
+
+cat("\nAll models fitted!\n")
+```
+
+## Individual Model Performance
+
+```{r}
+# Calculate accuracy for each model
+acc_TBATS <- accuracy(TBATS_for$mean, observed_july2010)
+acc_ARIMA24 <- accuracy(ARIMA_24_for$mean, observed_july2010)
+acc_ARIMA36 <- accuracy(ARIMA_36_for$mean, observed_july2010)
+acc_ARIMA26_nw <- accuracy(ARIMA_26_noweather_for$mean, observed_july2010)
+acc_NN <- accuracy(NN_for$mean, observed_july2010)
+
+individual_results <- data.frame(
+  Model = c("TBATS", "ARIMA+Weather K(2,4)", "ARIMA+Weather K(3,6)", 
+            "ARIMA No Weather K(2,6)", "Neural Network"),
+  RMSE = c(acc_TBATS[2], acc_ARIMA24[2], acc_ARIMA36[2], acc_ARIMA26_nw[2], acc_NN[2]),
+  MAE = c(acc_TBATS[3], acc_ARIMA24[3], acc_ARIMA36[3], acc_ARIMA26_nw[3], acc_NN[3]),
+  MAPE = c(acc_TBATS[5], acc_ARIMA24[5], acc_ARIMA36[5], acc_ARIMA26_nw[5], acc_NN[5])
+)
+
+kbl(individual_results,
+    caption = "Individual Model Performance - July 2010 Validation",
+    digits = 4) %>%
+  kable_styling(full_width = FALSE, position = "center",
+                latex_options = "hold_position")
+```
+
+## Create Ensemble Forecasts
+
+```{r}
+cat("\n=== CREATING ENSEMBLES ===\n\n")
+
+# Ensemble 1: Simple Average (all 5 models)
+ensemble_simple <- (TBATS_for$mean + ARIMA_24_for$mean + ARIMA_36_for$mean + 
+                   ARIMA_26_noweather_for$mean + NN_for$mean) / 5
+
+# Ensemble 2: Weighted by inverse RMSE (better models get more weight)
+w_tbats <- 1/acc_TBATS[2]
+w_arima24 <- 1/acc_ARIMA24[2]
+w_arima36 <- 1/acc_ARIMA36[2]
+w_arima26 <- 1/acc_ARIMA26_nw[2]
+w_nn <- 1/acc_NN[2]
+total_w <- w_tbats + w_arima24 + w_arima36 + w_arima26 + w_nn
+
+ensemble_weighted <- (TBATS_for$mean * w_tbats/total_w +
+                     ARIMA_24_for$mean * w_arima24/total_w +
+                     ARIMA_36_for$mean * w_arima36/total_w +
+                     ARIMA_26_noweather_for$mean * w_arima26/total_w +
+                     NN_for$mean * w_nn/total_w)
+
+# Ensemble 3: Top 3 only (exclude worst 2)
+rmse_values <- c(acc_TBATS[2], acc_ARIMA24[2], acc_ARIMA36[2], acc_ARIMA26_nw[2], acc_NN[2])
+top3_idx <- order(rmse_values)[1:3]
+
+forecasts_list <- list(TBATS_for$mean, ARIMA_24_for$mean, ARIMA_36_for$mean, 
+                      ARIMA_26_noweather_for$mean, NN_for$mean)
+ensemble_top3 <- (forecasts_list[[top3_idx[1]]] + 
+                 forecasts_list[[top3_idx[2]]] + 
+                 forecasts_list[[top3_idx[3]]]) / 3
+
+# Ensemble 4: ARIMA models only (exclude TBATS and NN)
+ensemble_arima_only <- (ARIMA_24_for$mean + ARIMA_36_for$mean + 
+                       ARIMA_26_noweather_for$mean) / 3
+
+# Ensemble 5: Best 2 (lowest RMSE models)
+top2_idx <- order(rmse_values)[1:2]
+ensemble_best2 <- (forecasts_list[[top2_idx[1]]] + forecasts_list[[top2_idx[2]]]) / 2
+
+cat("Ensembles created!\n")
+```
+
+## Ensemble Performance
+
+```{r}
+# Calculate accuracy for ensembles
+acc_simple <- accuracy(ensemble_simple, observed_july2010)
+acc_weighted <- accuracy(ensemble_weighted, observed_july2010)
+acc_top3 <- accuracy(ensemble_top3, observed_july2010)
+acc_arima <- accuracy(ensemble_arima_only, observed_july2010)
+acc_best2 <- accuracy(ensemble_best2, observed_july2010)
+
+ensemble_results <- data.frame(
+  Ensemble = c("Simple Average (All 5)", "Weighted by RMSE", "Top 3 Models",
+              "ARIMA Only", "Best 2 Models"),
+  RMSE = c(acc_simple[2], acc_weighted[2], acc_top3[2], acc_arima[2], acc_best2[2]),
+  MAE = c(acc_simple[3], acc_weighted[3], acc_top3[3], acc_arima[3], acc_best2[3]),
+  MAPE = c(acc_simple[5], acc_weighted[5], acc_top3[5], acc_arima[5], acc_best2[5])
+)
+
+ensemble_results <- ensemble_results %>%
+  arrange(RMSE) %>%
+  mutate(Rank = row_number())
+
+kbl(ensemble_results,
+    caption = "Ensemble Model Performance - July 2010 Validation",
+    digits = 4) %>%
+  kable_styling(full_width = FALSE, position = "center",
+                latex_options = "hold_position") %>%
+  row_spec(1, bold = TRUE, background = "#90EE90")
+```
+
+## Combined Results Table
+
+```{r}
+# Combine individual and ensemble results
+combined_results <- bind_rows(
+  individual_results %>% mutate(Type = "Individual"),
+  ensemble_results %>% select(-Rank) %>% rename(Model = Ensemble) %>% mutate(Type = "Ensemble")
+) %>%
+  arrange(RMSE) %>%
+  mutate(Rank = row_number())
+
+kbl(combined_results,
+    caption = "All Models Ranked by RMSE",
+    digits = 4) %>%
+  kable_styling(full_width = FALSE, position = "center",
+                latex_options = "hold_position") %>%
+  row_spec(which(combined_results$Rank == 1), bold = TRUE, background = "#FFD700")
+```
+
+## Generate Final Forecasts for Best Ensembles
+
+```{r}
+cat("\n=== GENERATING KAGGLE SUBMISSIONS FOR TOP 3 ENSEMBLES ===\n\n")
+
+# Get top 3 ensemble methods
+top_ensembles <- ensemble_results %>% arrange(RMSE) %>% slice(1:3)
+
+# Retrain all models on full data
+cat("Retraining all models on full dataset...\n")
+
+TBATS_final <- tbats(demand_msts)
+TBATS_final_for <- forecast(TBATS_final, h = 31)
+
+july2010_weather <- weather_xreg[(nobs - n_for + 1):(nobs - n_for + 31), ]
+
+ARIMA_24_final <- auto.arima(demand_msts, seasonal=FALSE, lambda=0,
+                             xreg=cbind(fourier(demand_msts, K=c(2,4)), weather_xreg))
+ARIMA_24_final_for <- forecast(ARIMA_24_final, h=31,
+                               xreg=cbind(fourier(demand_msts, K=c(2,4), h=31),
+                                         july2010_weather))
+
+ARIMA_36_final <- auto.arima(demand_msts, seasonal=FALSE, lambda=0,
+                             xreg=cbind(fourier(demand_msts, K=c(3,6)), weather_xreg))
+ARIMA_36_final_for <- forecast(ARIMA_36_final, h=31,
+                               xreg=cbind(fourier(demand_msts, K=c(3,6), h=31),
+                                         july2010_weather))
+
+ARIMA_26_nw_final <- auto.arima(demand_msts, seasonal=FALSE, lambda=0,
+                                xreg=fourier(demand_msts, K=c(2,6)))
+ARIMA_26_nw_final_for <- forecast(ARIMA_26_nw_final, h=31,
+                                  xreg=fourier(demand_msts, K=c(2,6), h=31))
+
+NN_final <- nnetar(demand_msts, p=1, P=0,
+                  xreg=cbind(fourier(demand_msts, K=c(2,4)), weather_xreg))
+NN_final_for <- forecast(NN_final, h=31,
+                        xreg=cbind(fourier(demand_msts, K=c(2,4), h=31),
+                                  july2010_weather))
+
+# Create ensembles for July 2011
+ensemble_simple_final <- (TBATS_final_for$mean + ARIMA_24_final_for$mean + 
+                         ARIMA_36_final_for$mean + ARIMA_26_nw_final_for$mean + 
+                         NN_final_for$mean) / 5
+
+ensemble_weighted_final <- (TBATS_final_for$mean * w_tbats/total_w +
+                           ARIMA_24_final_for$mean * w_arima24/total_w +
+                           ARIMA_36_final_for$mean * w_arima36/total_w +
+                           ARIMA_26_nw_final_for$mean * w_arima26/total_w +
+                           NN_final_for$mean * w_nn/total_w)
+
+forecasts_final_list <- list(TBATS_final_for$mean, ARIMA_24_final_for$mean, 
+                            ARIMA_36_final_for$mean, ARIMA_26_nw_final_for$mean, 
+                            NN_final_for$mean)
+
+ensemble_top3_final <- (forecasts_final_list[[top3_idx[1]]] + 
+                       forecasts_final_list[[top3_idx[2]]] + 
+                       forecasts_final_list[[top3_idx[3]]]) / 3
+
+ensemble_arima_final <- (ARIMA_24_final_for$mean + ARIMA_36_final_for$mean + 
+                        ARIMA_26_nw_final_for$mean) / 3
+
+ensemble_best2_final <- (forecasts_final_list[[top2_idx[1]]] + 
+                        forecasts_final_list[[top2_idx[2]]]) / 2
+
+# Save ensemble forecasts
+july2011_dates <- seq(as.Date("2011-07-01"), as.Date("2011-07-31"), by = "day")
+
+ensemble_list <- list(
+  list(name = "simple", forecast = ensemble_simple_final),
+  list(name = "weighted", forecast = ensemble_weighted_final),
+  list(name = "top3", forecast = ensemble_top3_final),
+  list(name = "arima_only", forecast = ensemble_arima_final),
+  list(name = "best2", forecast = ensemble_best2_final)
+)
+
+for(ens in ensemble_list) {
+  submission <- data.frame(
+    date = july2011_dates,
+    load = as.numeric(ens$forecast)
+  )
+  
+  filename <- paste0("Submissions/ensemble_models/gilman_salzberg_ensemble_", ens$name, ".csv")
+  write.csv(submission, file = filename, row.names = FALSE)
+  cat("Saved:", filename, "\n")
+}
+
+cat("\n=== COMPLETE ===\n")
+cat("Generated 5 ensemble submission files\n")
+```
+
+## Summary
+
+```{r}
+cat("\n=== ENSEMBLE STRATEGY SUMMARY ===\n\n")
+cat("Best Ensemble:", ensemble_results$Ensemble[1], "\n")
+cat("Validation RMSE:", round(ensemble_results$RMSE[1], 2), "\n")
+cat("Validation MAPE:", round(ensemble_results$MAPE[1], 2), "%\n\n")
+cat("Ensembles often outperform individual models on unseen data!\n")
+cat("Submit all 5 ensemble files to Kaggle and compare.\n")
+```
