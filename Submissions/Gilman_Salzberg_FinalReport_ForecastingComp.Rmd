@@ -1,16 +1,16 @@
 ---
-title: "Salzberg_DataCleanAttempt1"
-author: "Josh Salzberg"
-date: "2026-03-30"
-output: pdf_document
+title: "Gilman_Salzberg_FinalReport_ForecastingComp"
+output: html_document
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-```
+# Jonathan Gilman & Joshua Salzberg Forecasting Competition
+## Final Report
+### 4/23/2026
+Github: https://github.com/fetadata/Gilman_Salzberg_ENV797_TSA_ForecastCompetition_S26
 
 
-```{r}
+# Data Import & Wrangling
+```{r include=FALSE}
 ## Setup
 libraries <- c('forecast','here','tidyverse','zoo','Kendall','tseries','outliers','smooth', "openxlsx", "readxl", "stats")
 lapply(libraries,require,character.only=T)
@@ -52,14 +52,6 @@ humid_clean <- humid_init %>%
     summarize(avg_humidity=mean(humidity))
 write.csv(humid_clean, file = here("Data","Processed","CleanHumidity_v1.csv"))
 
-# humid_clean2 <- humid_init %>% 
-#   mutate(date = ymd(date)) %>% 
-#   mutate(avg_humidity=mean(across(c(3:30))))
-#   group_by(date) %>% 
-#     summarize(avg_humidity_final=mean(avg_humidity))
-# write.csv(humid_clean, file = here("Data","Processed","CleanHumidity_v2.csv"))
-
-
 temp_clean <- temp_init %>% 
   mutate(date = ymd(date)) %>% 
   pivot_longer(cols = c(3:30), names_to = "T_source", values_to = "temp") %>% 
@@ -68,6 +60,7 @@ temp_clean <- temp_init %>%
 write.csv(temp_clean, file = here("Data","Processed", "CleanTemp_v1.csv"))
 
 #Visualize Series
+
 ggplot(data = demand_clean, aes(x = date, y = avg_load))+
   geom_line()+
   labs(title = "Average Daily Electricity Demand",
@@ -85,3 +78,9 @@ ggplot(data = temp_clean, aes(x = date, y = avg_temp))+
 ```
 
 
+# Top Models
+## 1. 
+
+
+
+# Source Attributions
