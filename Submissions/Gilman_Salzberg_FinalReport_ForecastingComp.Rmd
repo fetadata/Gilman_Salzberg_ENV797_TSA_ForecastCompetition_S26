@@ -14,7 +14,7 @@ This report documents our approach to forecasting daily electricity demand for J
 Our strategy involved fitting multiple model types and then combining their forecasts through ensemble methods. After testing over 25 individual models, we found that ensemble approaches consistently outperformed single models on validation data. This report presents our top 5 performing models, all of which are ensemble methods.
 
 # Data Import & Wrangling
-```{r include=FALSE}
+```{r echo=TRUE, eval=TRUE,message=FALSE,warning=FALSE, results='hide'}
 ## Setup
 libraries <- c('forecast','here','tidyverse','zoo','Kendall','tseries','outliers','smooth', "openxlsx", "readxl", "stats", "lubridate", "ggplot2", "kableExtra")
 lapply(libraries,require,character.only=T)
@@ -109,7 +109,7 @@ weather_xreg <- cbind(temp = data_full$avg_temp,
 
 ## Training and Validation Split
 
-We trained models on Jan 2005 - Jun 2010 and validated on July 2010 before retraining on the full dataset.
+We trained models on Jan 2005 - Jun 2010 and validated on July 2010 before forecasting using the full dataset.
 
 ```{r train_test_split}
 n_for <- 365  # Hold out last year for validation
@@ -627,6 +627,3 @@ Claude (Anthropic) was used to assist with:
 Base models were built independently by the authors following class materials. Modeling decisions regarding which ensemble strategies to test, interpretation of results, and selection of final submissions were made by the authors.
 
 \newpage
-
-
-# Source Attributions
