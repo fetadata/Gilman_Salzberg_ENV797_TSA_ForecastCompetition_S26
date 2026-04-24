@@ -73,7 +73,9 @@ Manually enter the scores you've seen on Kaggle:
 ```{r}
 
 kaggle_scores <- data.frame(
-  model = c("advanced_bayesian_v2", "optimized_trimmed", "advanced_winsorized", 
+  model = c("bayesian_k100", "super_ensemble", "advanced_bayesian_v2", 
+            "adaptive_critical", "bayesian_top5",
+            "optimized_trimmed", "advanced_winsorized", 
             "ULTIMATE_v2", "ensemble_top3", "optimized_diverse",
             "top3_kaggle_ensemblev2", "advanced_trimmed25", "advanced_trimmed20_v2",
             "optimized_median", "optimized_top3_weighted", "optimized_smoothed", 
@@ -83,7 +85,8 @@ kaggle_scores <- data.frame(
             "ensemble_arima_only", "tbats", "ensemble_best2", "ets_s13", 
             "arima_weather_K1_6", "advanced_hybrid_v2", "nn_weather", 
             "ets_robust", "arima_fourier", "snaive2", "ets_damped", "ets_standard"),
-  score = c(0.1003, 0.1008, 0.1013, 0.1014, 0.1015, 0.1015, 0.1017, 0.1018, 0.1018,
+  score = c(0.1001, 0.1001, 0.1003, 0.1003, 0.1003,
+            0.1008, 0.1013, 0.1014, 0.1015, 0.1015, 0.1017, 0.1018, 0.1018,
             0.1019, 0.1019, 0.1022, 0.1023, 0.1025, 0.1037, 0.1039, 0.1040,
             0.1060, 0.1062, 0.1078, 0.1079, 0.1082, 0.1110, 0.1121, 0.1318,
             0.1321, 0.1323, 0.1331, 0.1465, 0.1528, 0.1602, 0.1647, 0.1648),
